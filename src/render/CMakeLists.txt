@@ -3,8 +3,6 @@ add_library(vx_render STATIC
     Raster.h Raster.cpp
     Blend.h Blend.cpp
     Filters.h Filters.cpp
-    BrushResources.h BrushResources.cpp
-    DabEngine.h DabEngine.cpp
     Renderer.h Renderer.cpp
     SvgExport.h SvgExport.cpp
 )

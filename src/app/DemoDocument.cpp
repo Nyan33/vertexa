@@ -3,6 +3,7 @@
 
 #include "core/DocumentOps.h"
 #include "core/TimelineOps.h"
+#include "core/VectorBrush.h"
 #include "geom/Fit.h"
 #include "geom/Outline.h"
 
@@ -79,35 +80,30 @@ Document createDemoDocument()
     auto ballInst = convertToSymbol(d, {makeShapeElement(ball, false)}, "Ball", SymbolType::MovieClip, {0, 0});
 
     // Layers (top to bottom in the timeline) ------------------------------------
-    // Paint: texture brush strokes.
+    // Vector brushes: textured, art, pattern and scatter strokes (all fills).
     {
-        Layer& l = addLayer(d, tl, "Texture paint", frames);
-        auto pe = std::make_shared<PaintElement>();
-        const auto& presets = builtinBrushPresets();
-        auto strokeOf = [&](int preset, Color c, double y0, double amp, uint32_t seed, double scale = 1.0) {
-            PaintStroke s;
-            BrushPreset p = presets[size_t(preset)];
-            p.size *= scale;
-            s.brush = std::make_shared<BrushPreset>(p);
-            s.color = c;
-            s.seed = seed;
+        Layer& l = addLayer(d, tl, "Vector brushes", frames);
+        ShapeGraph merged;
+        auto strokeOf = [&](const char* id, Color c, double y0, double amp, uint32_t seed) {
+            const VectorBrushPreset* p = builtinVectorBrush(id);
+            if (!p) return;
+            std::vector<InputSample> samples;
             for (int i = 0; i <= 80; ++i) {
                 const double t = i / 80.0;
-                PaintSample ps;
-                ps.pos = {860 + t * 360, y0 + std::sin(t * 7.0) * amp};
-                ps.pressure = float(0.25 + 0.75 * std::sin(t * kPi));
-                ps.tiltX = 25;
-                ps.tiltY = 10;
-                s.samples.push_back(ps);
+                InputSample q;
+                q.pos = {860 + t * 360, y0 + std::sin(t * 7.0) * amp};
+                q.pressure = 0.25 + 0.75 * std::sin(t * kPi);
+                samples.push_back(q);
             }
-            return s;
+            const ShapeGraph g = vectorBrushGraph(vectorBrushStroke(*p, vectorBrushPath(*p, samples), FillStyle::solid(c), seed, 0.05));
+            merged = merged.isEmpty() ? g : overlay(merged, g);
         };
-        pe->strokes.push_back(strokeOf(2, Color(0xFF, 0x5B, 0x2E), 520, 18, 3));
-        pe->strokes.push_back(strokeOf(3, Color(0x1B, 0x1A, 0x22), 570, 14, 5));
-        pe->strokes.push_back(strokeOf(0, Color(0x3D, 0x8B, 0xFF), 610, 10, 7, 1.5));
-        pe->strokes.push_back(strokeOf(5, Color(0x2B, 0xD9, 0xA8), 650, 16, 9));
-        pe->pivot = pe->localBounds().center();
-        l.keys[0].elements.push_back(pe);
+        strokeOf("chalk", Color(0xFF, 0x5B, 0x2E), 512, 14, 3);
+        strokeOf("ink-taper", Color(0x1B, 0x1A, 0x22), 550, 12, 5);
+        strokeOf("vine", Color(0x2E, 0x6B, 0x3A), 592, 10, 7);
+        strokeOf("stipple", Color(0x2B, 0xD9, 0xA8), 634, 14, 9);
+        strokeOf("rope", Color(0x3D, 0x8B, 0xFF), 668, 8, 11);
+        setKeyframeMergeShape(l.keys[0], std::move(merged));
     }
     // Motion guide + ball following it.
     {

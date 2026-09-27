@@ -2,7 +2,6 @@
 #include "Renderer.h"
 #include "Blend.h"
 #include "Filters.h"
-#include "DabEngine.h"
 #include "QtConvert.h"
 #include "Raster.h"
 
@@ -10,26 +9,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include <list>
-#include <mutex>
 
 namespace vx {
 
 namespace {
-
-// --- texture paint cache ------------------------------------------------------------
-struct PaintCacheEntry {
-    std::weak_ptr<const Element> owner;
-    const Element* key = nullptr;
-    Affine m;
-    ColorTransform ct;
-    QImage img;
-    QPoint origin;
-};
-
-std::mutex g_cacheMutex;
-std::list<PaintCacheEntry> g_paintCache;
-constexpr size_t kPaintCacheSize = 64;
 
 QPen penFor(const StrokeStyle& s, const ColorTransform& ct)
 {
@@ -80,12 +63,6 @@ QRect deviceRect(const Rect& r)
 } // namespace
 
 Renderer::Renderer(const Document& doc, RenderOptions opts) : m_doc(doc), m_opts(std::move(opts)) {}
-
-void Renderer::clearCache()
-{
-    std::lock_guard<std::mutex> lock(g_cacheMutex);
-    g_paintCache.clear();
-}
 
 void Renderer::renderShape(QImage& target, const ShapeRenderData& rd, const Affine& m, const ColorTransform& ct,
                            const QRect& clip)
@@ -276,12 +253,6 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
         for (const ElementPtr& ch : g.children) renderElement(target, {ch, item.localFrame}, gc, false);
         return;
     }
-    case ElementType::Paint: {
-        Ctx pc = ec;
-        pc.m = m;
-        renderPaint(target, item.element, pc);
-        return;
-    }
     case ElementType::Instance: {
         const auto& in = static_cast<const InstanceElement&>(e);
         if (!in.visible) return;
@@ -331,66 +302,6 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
         return;
     }
     }
-}
-
-void Renderer::renderPaint(QImage& target, const ElementPtr& owner, const Ctx& c)
-{
-    const auto& p = static_cast<const PaintElement&>(*owner);
-    if (c.outline) {
-        QPainter qp(&target);
-        qp.setRenderHint(QPainter::Antialiasing);
-        qp.setPen(QPen(c.outlineColor, 1.0));
-        qp.setTransform(toQTransform(c.m));
-        for (const PaintStroke& s : p.strokes)
-            for (size_t i = 1; i < s.samples.size(); ++i) qp.drawLine(toQPoint(s.samples[i - 1].pos), toQPoint(s.samples[i].pos));
-        return;
-    }
-    const Rect local = p.localBounds();
-    if (local.isEmpty()) return;
-    // Split the device transform into an integer offset and a fractional part
-    // so panning reuses cached rasterisations.
-    const QPoint off(int(std::floor(c.m.tx)), int(std::floor(c.m.ty)));
-    Affine frac = c.m;
-    frac.tx -= off.x();
-    frac.ty -= off.y();
-    QRect area = deviceRect(frac.mapRect(local));
-    const QRect visible = c.clip.translated(-off);
-    const bool huge = double(area.width()) * area.height() > 12e6;
-    if (huge) area = area.intersected(visible);
-    if (area.isEmpty() || !area.intersects(visible)) return;
-
-    QImage img;
-    if (!huge) {
-        std::lock_guard<std::mutex> lock(g_cacheMutex);
-        for (auto it = g_paintCache.begin(); it != g_paintCache.end(); ++it) {
-            if (it->key == &p && !it->owner.expired() && it->m == frac && it->ct == c.ct) {
-                img = it->img;
-                g_paintCache.splice(g_paintCache.begin(), g_paintCache, it);
-                break;
-            }
-        }
-    }
-    if (img.isNull()) {
-        img = QImage(area.size(), QImage::Format_ARGB32_Premultiplied);
-        img.fill(0);
-        DabContext dc;
-        dc.toDevice = Affine::translate(-area.left(), -area.top()) * frac;
-        dc.color = c.ct;
-        dc.doc = &m_doc;
-        paintElement(img, p, dc);
-        if (!huge) {
-            std::lock_guard<std::mutex> lock(g_cacheMutex);
-            PaintCacheEntry entry;
-            entry.key = &p;
-            entry.owner = owner;
-            entry.m = frac;
-            entry.ct = c.ct;
-            entry.img = img;
-            g_paintCache.push_front(std::move(entry));
-            while (g_paintCache.size() > kPaintCacheSize) g_paintCache.pop_back();
-        }
-    }
-    compositeImage(target, img, area.topLeft() + off, BlendMode::Normal, 1.0);
 }
 
 QImage Renderer::renderFrame(const Document& doc, const Timeline& tl, int frame, double scale, bool transparent,

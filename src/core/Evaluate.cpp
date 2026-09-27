@@ -18,8 +18,7 @@ bool tweenable(const ElementPtr& a, const ElementPtr& b)
         return static_cast<const InstanceElement&>(*a).symbolId == static_cast<const InstanceElement&>(*b).symbolId;
     case ElementType::Shape:
         return static_cast<const ShapeElement&>(*a).isObject && static_cast<const ShapeElement&>(*b).isObject;
-    case ElementType::Group:
-    case ElementType::Paint: return true;
+    case ElementType::Group: return true;
     case ElementType::Morph: return false;
     }
     return false;
@@ -173,7 +172,6 @@ Rect elementBounds(const Document& doc, const Element& e, int localFrame, int de
         for (const ElementPtr& c : g.children) r.include(elementBounds(doc, *c, localFrame, depth + 1));
         return e.matrix.mapRect(r);
     }
-    case ElementType::Paint: return e.matrix.mapRect(static_cast<const PaintElement&>(e).localBounds());
     case ElementType::Morph: {
         const auto& m = static_cast<const MorphElement&>(e);
         return m.data ? e.matrix.mapRect(m.data->bounds) : r;
@@ -239,16 +237,6 @@ std::shared_ptr<ShapeElement> makeShapeElement(ShapeGraph g, bool isObject, cons
     const Rect b = s->graph->bounds(false);
     if (!b.isEmpty()) s->pivot = b.center();
     return s;
-}
-
-Rect PaintElement::localBounds() const
-{
-    Rect r;
-    for (const PaintStroke& s : strokes) {
-        const double rad = s.brush ? s.brush->size * 0.5 * (1.0 + s.brush->scatter * 2.0 + s.brush->sizeJitter) : 1.0;
-        for (const PaintSample& p : s.samples) r.include(Rect(p.pos.x - rad, p.pos.y - rad, p.pos.x + rad, p.pos.y + rad));
-    }
-    return r;
 }
 
 } // namespace vx

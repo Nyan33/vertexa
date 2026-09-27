@@ -8,7 +8,7 @@ behaviour, file formats and algorithms; no source code was copied from them.
 | Project | What we look at |
 |---|---|
 | **Adobe Animate / Flash** | The behaviour Vertexa reproduces: merge vs. object drawing, the fill-based brush and its modes, eraser modes, paint bucket gap closing, selection bending, symbols and edit in place, classic / shape tweens, blend modes, timeline shortcuts. |
-| [**Krita**](https://invent.kde.org/graphics/krita) | Texture brush design: auto and predefined tips, spacing, sensor curves, the "Pattern" (texture) option with multiply / subtract / height modes, wash vs. build-up, `.gbr` brush tips, blend modes beyond Flash, tablet handling and pressure curves. |
+| [**Krita**](https://invent.kde.org/graphics/krita) | Brush preset browsing and sensor (pressure) curves, textures anchored to the canvas, blend modes beyond Flash, tablet handling and pressure curves. |
 | [**OpenToonz**](https://github.com/opentoonz/opentoonz) | A production 2D animation tool with vector levels and region filling (gap closing, "autoclose"), Xsheet/timeline workflows and tablet input on all platforms. |
 | [**Flare**](https://github.com/Flare-Animate/Flare) ([site](https://flare-animate.github.io/website/)) | An open-source animation editor built around Flash/Animate workflows. Its documentation refers to the Adobe Flash API and to similar projects; we use it to check feature coverage and naming. |
 | [**Ruffle**](https://github.com/ruffle-rs/ruffle) | Flash player in Rust: a reference for how SWF shapes (edge lists with fillStyle0/1) turn into filled regions, and how Flash applies blend modes, colour transforms and masks. |
@@ -23,6 +23,12 @@ behaviour, file formats and algorithms; no source code was copied from them.
   `fillStyle1`, `strokeStyle`, `DOMSymbolInstance`, tweens and eases.
 - W3C, *Compositing and Blending Level 1* — the separable and non-separable
   blend mode formulas.
+- Microsoft, *[MS-CFB]: Compound File Binary File Format* — the OLE2 container
+  of binary `.fla` files.
+- RFC 1951 (DEFLATE) and PKWARE's *APPNOTE.TXT* — the ZIP container of XFL
+  `.fla` files.
+- Adobe Animate user guide — Art and Pattern brushes (Paint Brush), the filter
+  set and its parameters, instance behaviour.
 - Qt 6, `QTabletEvent` and the Windows Ink / WinTab platform options.
 
 ## Papers and algorithms
@@ -42,4 +48,4 @@ behaviour, file formats and algorithms; no source code was copied from them.
 
 - [Inter](https://rsms.me/inter/) and Inter Display by Rasmus Andersson —
   SIL Open Font License 1.1 (`resources/fonts/OFL.txt`).
-- All icons, brush tips and paper textures are generated procedurally in code.
+- All icons and built-in brush artwork are generated procedurally in code.

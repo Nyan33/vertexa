@@ -231,4 +231,30 @@ VX_TEST(refit_region_is_smooth)
     CHECK_NEAR(fit.area() / raw.area(), 1.0, 2e-3);
 }
 
+VX_TEST(near_tangent_crossing_next_to_piece_ends)
+{
+    // Two curves that cross at 0.07 degrees, 0.13 px after sharing an end
+    // point, right next to the ends of their monotone pieces (a vine leaf
+    // meeting its stem). The crossing must be found with one shared point,
+    // otherwise the arrangement merges the faces on both sides.
+    const Cubic stem({346.023884, 66.076015}, {344.838980, 65.760658}, {343.657185, 65.635380}, {342.434209, 65.643851});
+    const Cubic leaf({342.434209, 65.643851}, {349.384767, 65.587278}, {356.926058, 71.265286}, {359.091933, 77.812672});
+    std::vector<Cubic> ms, ml;
+    stem.monotonePieces(ms);
+    leaf.monotonePieces(ml);
+    int crossings = 0;
+    for (const Cubic& a : ms)
+        for (const Cubic& b : ml) {
+            std::vector<CurveHit> hits;
+            intersectCurves(a, b, hits, 1e-7);
+            for (const CurveHit& h : hits) {
+                if (distance(h.p, stem.p3) < 1e-6) continue; // the shared end point
+                ++crossings;
+                CHECK(distance(a.eval(h.t1), b.eval(h.t2)) < 1e-9);
+                CHECK_NEAR(h.p.x, 342.5614, 1e-3);
+            }
+        }
+    CHECK(crossings == 1);
+}
+
 VX_TEST_MAIN()

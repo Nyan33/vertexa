@@ -3,8 +3,7 @@
 
 #include "core/DocumentOps.h"
 #include "render/Blend.h"
-#include "render/BrushResources.h"
-#include "render/DabEngine.h"
+#include "core/VectorBrush.h"
 #include "render/Filters.h"
 #include "render/Raster.h"
 #include "render/Renderer.h"
@@ -79,25 +78,27 @@ VX_TEST(blend_modes)
     CHECK(std::abs(qRed(d5.pixel(0, 0)) - 192) <= 1);
 }
 
-VX_TEST(texture_brush_paints)
+VX_TEST(vector_brushes_render)
 {
-    for (const BrushPreset& p : builtinBrushPresets()) {
-        const QImage prev = brushPreview(p, Color(0, 0, 0), 160, 60);
+    // Every built-in brush stroke renders as ordinary vector fills.
+    for (const VectorBrushPreset& p : builtinVectorBrushes()) {
+        std::vector<InputSample> samples;
+        for (int i = 0; i <= 40; ++i) {
+            InputSample q;
+            q.pos = {20 + i * 3.0, 30 + std::sin(i * 0.2) * 8};
+            q.pressure = 0.8;
+            samples.push_back(q);
+        }
+        VectorBrushPreset small = p;
+        small.size = std::min(p.size, 16.0);
+        const ShapeGraph g = vectorBrushGraph(vectorBrushStroke(small, vectorBrushPath(small, samples), FillStyle::solid(Color(0, 0, 0)), 3, 0.05));
+        QImage img = blank(160, 60);
+        Renderer::renderShape(img, g.renderData(), Affine{}, {}, img.rect());
         int painted = 0;
-        for (int y = 0; y < prev.height(); ++y)
-            for (int x = 0; x < prev.width(); ++x) painted += qAlpha(prev.pixel(x, y)) > 0;
+        for (int y = 0; y < img.height(); ++y)
+            for (int x = 0; x < img.width(); ++x) painted += qAlpha(img.pixel(x, y)) > 0;
         CHECK(painted > 50);
     }
-    CHECK(BrushResources::image("builtin:paper") != nullptr);
-    CHECK(BrushResources::image("builtin:chalk") != nullptr);
-    // GBR v2 round trip: 2x1 brush.
-    QByteArray gbr;
-    auto be = [&](quint32 v) { for (int s = 24; s >= 0; s -= 8) gbr.append(char((v >> s) & 0xff)); };
-    be(28 + 5); be(2); be(2); be(1); be(1); gbr.append("GIMP"); be(25); gbr.append("test", 4); gbr.append('\0');
-    gbr.append(char(0)); gbr.append(char(255));
-    QString name;
-    const GrayImagePtr tip = BrushResources::loadGbr(gbr, &name);
-    CHECK(tip && tip->width == 2 && tip->pixels[1] == 255 && name == "test");
 }
 
 VX_TEST(filters)

@@ -9,6 +9,7 @@
 #include "app/Theme.h"
 #include "core/DocumentOps.h"
 #include "core/Evaluate.h"
+#include "core/VectorBrush.h"
 #include "render/QtConvert.h"
 
 #include <QApplication>
@@ -134,7 +135,7 @@ VX_TEST(selection_move_bend_and_marquee)
     CHECK(f.fillArea() < before);
 }
 
-VX_TEST(pencil_and_texture_brush)
+VX_TEST(pencil_and_vector_paint_brush)
 {
     Fixture f;
     f.ed.settings().pencilMode = PencilMode::Smooth;
@@ -143,11 +144,34 @@ VX_TEST(pencil_and_texture_brush)
     f.drag(ToolId::Pencil, pts);
     ShapeGraphPtr g = f.ed.mergeShape(f.ed.layerIndex());
     CHECK(g && !g->strokes.empty() && g->fills.empty());
-    f.drag(ToolId::PaintBrush, pts);
-    const Keyframe* k = f.ed.currentLayer()->keyAt(0);
-    CHECK(k && asPaint(k->elements.back()) && asPaint(k->elements.back())->strokes.size() == 1);
-    f.drag(ToolId::PaintBrush, pts);
-    CHECK(asPaint(f.ed.currentLayer()->keyAt(0)->elements.back())->strokes.size() == 2);
+    // The paint brush adds vector fills in the stroke colour to the merge shape.
+    f.ed.settings().stroke.paint = FillStyle::solid(Color(200, 40, 20));
+    f.ed.settings().paint = *builtinVectorBrush("chalk");
+    f.ed.settings().paint.size = 30;
+    std::vector<Vec2> low;
+    for (const Vec2& p : pts) low.push_back(p + Vec2{0, 150});
+    f.drag(ToolId::PaintBrush, low);
+    g = f.ed.mergeShape(f.ed.layerIndex());
+    CHECK(g && g->fills.size() == 1 && g->fills[0].color == Color(200, 40, 20));
+    const double painted = f.fillArea();
+    CHECK(painted > 480 * 30 * 0.4);
+    CHECK(f.ed.currentLayer()->keyAt(0)->elements.size() == 1); // one merge shape
+    // An art brush along the same path; Undo removes it again.
+    f.ed.settings().paint = *builtinVectorBrush("ink-taper");
+    f.ed.settings().paint.size = 20;
+    std::vector<Vec2> high;
+    for (const Vec2& p : pts) high.push_back(p - Vec2{0, 150});
+    f.drag(ToolId::PaintBrush, high);
+    CHECK(f.fillArea() > painted + 1000);
+    f.ed.undoStack()->undo();
+    CHECK(std::abs(f.fillArea() - painted) < 1.0);
+    // Erasing with the brush removes paint along its (textured) path.
+    f.ed.settings().paint = *builtinVectorBrush("charcoal");
+    f.ed.settings().paint.size = 60;
+    f.ed.settings().paintErase = true;
+    f.drag(ToolId::PaintBrush, {{600, 350}, {600, 400}, {600, 500}});
+    CHECK(f.fillArea() < painted - 500);
+    f.ed.settings().paintErase = false;
 }
 
 VX_TEST(symbols_tweens_and_edit_in_place)

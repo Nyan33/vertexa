@@ -35,20 +35,6 @@ bool hitElement(const Document& d, const Element& e, Vec2 p, double tol, int loc
             if (hitElement(d, *c, q, ltol, localFrame, depth + 1)) return true;
         return false;
     }
-    case ElementType::Paint: {
-        for (const PaintStroke& s : static_cast<const PaintElement&>(e).strokes) {
-            if (s.erase) continue;
-            const double r = (s.brush ? s.brush->size * 0.5 : 1.0) + ltol;
-            for (size_t i = 0; i < s.samples.size(); ++i) {
-                const Vec2 a = s.samples[i].pos, b = i + 1 < s.samples.size() ? s.samples[i + 1].pos : a;
-                const Vec2 ab = b - a;
-                const double l2 = ab.lengthSq();
-                const double t = l2 > 0 ? std::clamp(dot(q - a, ab) / l2, 0.0, 1.0) : 0.0;
-                if (distance(q, a + ab * t) <= r) return true;
-            }
-        }
-        return false;
-    }
     case ElementType::Instance: {
         const auto& in = static_cast<const InstanceElement&>(e);
         const Symbol* sym = d.symbol(in.symbolId);
@@ -120,7 +106,6 @@ Rect localBoundsOf(const Document& d, const Element& e, int localFrame)
         for (const ElementPtr& c : static_cast<const GroupElement&>(e).children) r.include(elementBounds(d, *c, localFrame));
         return r;
     }
-    case ElementType::Paint: return static_cast<const PaintElement&>(e).localBounds();
     case ElementType::Morph: {
         const auto& m = static_cast<const MorphElement&>(e);
         return m.data ? m.data->bounds : Rect{};

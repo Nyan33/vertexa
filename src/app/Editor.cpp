@@ -57,7 +57,7 @@ Editor::Editor(QObject* parent) : QObject(parent)
     m_doc = Document::createDefault();
     m_settings.stroke.width = 2.0;
     m_settings.stroke.paint = FillStyle::solid(Color(0x15, 0x15, 0x1A));
-    m_settings.paint = builtinBrushPresets()[1];
+    if (const VectorBrushPreset* chalk = builtinVectorBrush("chalk")) m_settings.paint = *chalk;
 }
 
 Editor::~Editor() = default;

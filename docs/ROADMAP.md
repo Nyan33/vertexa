@@ -13,7 +13,10 @@
 - [x] Classic tweens (rotation, eases, motion guides) and shape tweens (hints)
 - [x] 14 Animate + 13 extra blend modes
 - [x] Graphics tablets: pressure, tilt, rotation, eraser end, pressure curve
-- [x] Krita-like texture brushes (dab engine, textures, `.gbr` import)
+- [x] Vector brushes: art, pattern, textured and scatter; brushes from a selection
+- [x] Filters on movie clips and buttons (all seven Animate filters)
+- [x] FLA import: binary Flash 5 – CS4 and XFL (CS5+, Animate)
+- [x] Per-instance behaviour (movie clip / graphic / button)
 - [x] `.vtx` files, PNG sequence / SVG / video export
 
 ## Next
@@ -25,11 +28,11 @@
 - **Align / Transform / Info panels**
 - **Camera layer** and **layer parenting**
 - **Bones (IK)** for symbols and shapes
-- **Filters** on movie clips (drop shadow, blur, glow, bevel, colour adjust)
 - **Motion tweens** (object-based, with Motion Editor) next to classic tweens
 - **Audio layers** with scrubbing
 - **Scenes** panel (the model already supports several scenes)
-- **Import**: XFL / FLA (via the XFL structure), SVG, bitmaps; **export**: SWF, animated GIF / APNG, sprite sheets
+- **FLA import, next steps**: bitmaps, text, sounds and shape tweens of binary files; XFL export
+- **Import**: SVG, bitmaps; **export**: SWF, animated GIF / APNG, sprite sheets
 - **Performance**: tiled and threaded rendering, GPU compositing of layers
 - **Localisation** (Russian first) and customisable shortcuts
 - Packages for Windows, macOS and Linux (AppImage / Flatpak)

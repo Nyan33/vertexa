@@ -10,6 +10,10 @@ add_executable(test_core test_core.cpp TestMain.h)
 target_link_libraries(test_core PRIVATE vx_core)
 add_test(NAME core COMMAND test_core)
 
+add_executable(test_brush test_brush.cpp TestMain.h)
+target_link_libraries(test_brush PRIVATE vx_core)
+add_test(NAME brush COMMAND test_brush)
+
 add_executable(test_fla test_fla.cpp TestMain.h)
 target_link_libraries(test_fla PRIVATE vx_core)
 add_test(NAME fla COMMAND test_fla)

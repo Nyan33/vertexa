@@ -23,8 +23,8 @@ QByteArray serializeClipboard(const Document& doc, const std::vector<ElementPtr>
 /// Returns the pasted elements; referenced symbols missing from `doc` are added.
 std::vector<ElementPtr> deserializeClipboard(const QByteArray& data, Document& doc);
 
-QJsonObject brushPresetToJson(const BrushPreset& p);
-BrushPreset brushPresetFromJson(const QJsonObject& o);
+QJsonObject vectorBrushToJson(const VectorBrushPreset& p);
+VectorBrushPreset vectorBrushFromJson(const QJsonObject& o);
 
 QJsonObject shapeGraphToJson(const ShapeGraph& g);
 ShapeGraph shapeGraphFromJson(const QJsonObject& o);

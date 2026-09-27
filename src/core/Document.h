@@ -5,6 +5,7 @@
 #pragma once
 
 #include "Timeline.h"
+#include "VectorBrush.h"
 
 #include <map>
 #include <string>
@@ -28,8 +29,8 @@ struct Document {
 
     std::vector<Timeline> scenes;
     std::vector<Symbol> symbols;
-    /// Imported brush tips / textures (id -> image).
-    std::map<std::string, GrayImagePtr> images;
+    /// Brushes made from artwork in this document (Paint Brush tool).
+    std::vector<VectorBrushPreset> brushes;
 
     uint32_t nextLayerId = 1;
     uint64_t nextSymbolSerial = 1;

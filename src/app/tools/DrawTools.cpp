@@ -6,11 +6,12 @@
 #include "core/DocumentOps.h"
 #include "core/Evaluate.h"
 #include "geom/Fit.h"
-#include "render/DabEngine.h"
 #include "render/QtConvert.h"
 
 #include <QPainter>
 #include <QRandomGenerator>
+
+#include <algorithm>
 
 #include <cmath>
 
@@ -51,6 +52,39 @@ Region maskFromPick(const Editor* ed, int layer)
     return selectionRegion(*pick.graph, pick.sel);
 }
 
+/// Mask for the Inside and Selection paint modes. False when painting must
+/// not start (Paint Selection without a selected fill).
+bool paintMask(Editor* ed, int layer, PaintMode mode, Vec2 at, std::optional<Region>& mask, bool& insideEmpty)
+{
+    mask.reset();
+    insideEmpty = false;
+    if (ed->settings().objectDrawing) return true;
+    if (mode == PaintMode::Inside) {
+        if (ShapeGraphPtr g = ed->mergeShape(layer)) {
+            const Arrangement& a = g->topology();
+            const int f = a.locate(at);
+            if (f > 0 && a.value(f, 0)) {
+                Region r;
+                r.contours = a.faceContours(f);
+                mask = r;
+            } else {
+                insideEmpty = true;
+            }
+        } else {
+            insideEmpty = true;
+        }
+    }
+    if (mode == PaintMode::Selection) {
+        Region r = maskFromPick(ed, layer);
+        if (r.isEmpty()) {
+            ed->notify(QObject::tr("Paint Selection: select a fill first"));
+            return false;
+        }
+        mask = r;
+    }
+    return true;
+}
+
 } // namespace
 
 bool commitShape(Editor* ed, int layerIndex, const ShapeGraph& g, const QString& label, const OverlayOptions& opt)
@@ -66,6 +100,45 @@ bool commitShape(Editor* ed, int layerIndex, const ShapeGraph& g, const QString&
         if (ed->settings().objectDrawing) k->elements.push_back(makeShapeElement(g, true));
         else mergeIntoKeyframe(*k, g, opt);
         return true;
+    });
+}
+
+bool eraseArea(Editor* ed, int layerIndex, const Region& r, EraseMode mode, const Region* mask, const QString& label)
+{
+    if (r.isEmpty()) return false;
+    return ed->edit(label, [&](Document& d) {
+        QString why;
+        if (!ed->canEdit(layerIndex, &why)) return false;
+        Timeline& tl = ed->mutableTimeline(d);
+        Keyframe* k = tl.layers[layerIndex].keyAt(ed->frame());
+        if (!k) return false;
+        const Rect rb = r.bounds();
+        bool changed = false;
+        for (int i = int(k->elements.size()) - 1; i >= 0; --i) {
+            const ShapeElement* sh = asShape(k->elements[i]);
+            if (!sh || !sh->graph) continue;
+            const Rect eb = elementBounds(d, *sh);
+            if (!eb.intersects(rb)) continue;
+            const bool merge = !sh->isObject;
+            const Region local = merge ? r : r.transformed(sh->matrix.inverted());
+            // Masks only make sense for the merge shape.
+            ShapeGraph out = erase(*sh->graph, local, merge ? mode : (mode == EraseMode::Lines ? EraseMode::Lines : EraseMode::Normal),
+                                   merge ? mask : nullptr);
+            if (out.edges.size() == sh->graph->edges.size() && out.fills.size() == sh->graph->fills.size()) {
+                bool same = true;
+                for (size_t j = 0; j < out.edges.size() && same; ++j) same = out.edges[j] == sh->graph->edges[j];
+                if (same) continue;
+            }
+            changed = true;
+            if (out.isEmpty()) {
+                k->elements.erase(k->elements.begin() + i);
+            } else {
+                auto c = sh->cloneAs<ShapeElement>();
+                c->graph = std::make_shared<ShapeGraph>(std::move(out));
+                k->elements[i] = c;
+            }
+        }
+        return changed;
     });
 }
 
@@ -175,31 +248,7 @@ void BrushTool::press(const ToolEvent& e)
         return;
     }
     const ToolSettings& s = ed->settings();
-    m_insideMask.reset();
-    m_insideEmpty = false;
-    if (s.brushMode == PaintMode::Inside && !s.objectDrawing) {
-        if (ShapeGraphPtr g = ed->mergeShape(m_layer)) {
-            const Arrangement& a = g->topology();
-            const int f = a.locate(e.pos);
-            if (f > 0 && a.value(f, 0)) {
-                Region r;
-                r.contours = a.faceContours(f);
-                m_insideMask = r;
-            } else {
-                m_insideEmpty = true;
-            }
-        } else {
-            m_insideEmpty = true;
-        }
-    }
-    if (s.brushMode == PaintMode::Selection && !s.objectDrawing) {
-        Region r = maskFromPick(ed, m_layer);
-        if (r.isEmpty()) {
-            ed->notify(QObject::tr("Paint Selection: select a fill first"));
-            return;
-        }
-        m_insideMask = r;
-    }
+    if (!paintMask(ed, m_layer, s.brushMode, e.pos, m_insideMask, m_insideEmpty)) return;
     beginStroke(e, s.brushSmoothing);
     rebuildPreview();
     update();
@@ -376,43 +425,7 @@ void EraserTool::release(const ToolEvent&)
     Region r = sweptRegion(bp, tip);
     if (r.isEmpty()) return;
     r = refitRegion(r, 0.08 * upp, 0.9);
-    const EraseMode mode = s.eraseMode;
-    const Region* mask = m_mask ? &*m_mask : nullptr;
-    const int li = m_layer;
-    ed->edit(QObject::tr("Erase"), [&](Document& d) {
-        QString why;
-        if (!ed->canEdit(li, &why)) return false;
-        Timeline& tl = ed->mutableTimeline(d);
-        Keyframe* k = tl.layers[li].keyAt(ed->frame());
-        if (!k) return false;
-        const Rect rb = r.bounds();
-        bool changed = false;
-        for (int i = int(k->elements.size()) - 1; i >= 0; --i) {
-            const ShapeElement* sh = asShape(k->elements[i]);
-            if (!sh || !sh->graph) continue;
-            const Rect eb = elementBounds(d, *sh);
-            if (!eb.intersects(rb)) continue;
-            const bool merge = !sh->isObject;
-            const Region local = merge ? r : r.transformed(sh->matrix.inverted());
-            // Masks only make sense for the merge shape.
-            ShapeGraph out = erase(*sh->graph, local, merge ? mode : (mode == EraseMode::Lines ? EraseMode::Lines : EraseMode::Normal),
-                                   merge ? mask : nullptr);
-            if (out.edges.size() == sh->graph->edges.size() && out.fills.size() == sh->graph->fills.size()) {
-                bool same = true;
-                for (size_t j = 0; j < out.edges.size() && same; ++j) same = out.edges[j] == sh->graph->edges[j];
-                if (same) continue;
-            }
-            changed = true;
-            if (out.isEmpty()) {
-                k->elements.erase(k->elements.begin() + i);
-            } else {
-                auto c = sh->cloneAs<ShapeElement>();
-                c->graph = std::make_shared<ShapeGraph>(std::move(out));
-                k->elements[i] = c;
-            }
-        }
-        return changed;
-    });
+    eraseArea(ed, m_layer, r, s.eraseMode, m_mask ? &*m_mask : nullptr, QObject::tr("Erase"));
 }
 
 void EraserTool::hover(const ToolEvent& e)
@@ -548,12 +561,15 @@ void PencilTool::paint(QPainter& p)
 QCursor PencilTool::cursor() const { return Qt::CrossCursor; }
 
 // --- PaintBrushTool -------------------------------------------------------------------------
+//
+// Every brush produces vector fills. While drawing, the exact vector stroke is
+// rebuilt as often as its cost allows; samples that arrived since the last
+// rebuild are shown as a quick round outline.
 
-BrushPresetPtr PaintBrushTool::currentPreset() const
+FillStyle PaintBrushTool::paintStyle() const
 {
-    BrushPreset p = ed->settings().paint;
-    p.size = std::max(0.2, p.size * ed->settings().paintSizeScale);
-    return std::make_shared<BrushPreset>(p);
+    // Like Animate's Paint Brush, the stroke colour paints.
+    return ed->settings().stroke.paint;
 }
 
 void PaintBrushTool::press(const ToolEvent& e)
@@ -564,36 +580,51 @@ void PaintBrushTool::press(const ToolEvent& e)
         ed->notify(why);
         return;
     }
-    m_preset = currentPreset();
+    const ToolSettings& s = ed->settings();
+    if (!s.paintErase && !paintMask(ed, m_layer, s.paintMode, e.pos, m_insideMask, m_insideEmpty)) return;
+    if (s.paintErase) {
+        m_insideMask.reset();
+        m_insideEmpty = false;
+    }
+    m_preset = s.paint;
     m_seed = QRandomGenerator::global()->generate() | 1u;
-    m_samples.clear();
-    m_rendered = 0;
-    const qreal dpr = view->devicePixelRatioF();
-    m_overlay = QImage(view->size() * dpr, QImage::Format_ARGB32_Premultiplied);
-    m_overlay.setDevicePixelRatio(dpr);
-    m_overlay.fill(0);
-    beginStroke(e, m_preset->smoothing);
-    for (const InputSample& s : m_points)
-        m_samples.push_back({s.pos, float(s.pressure), float(s.tiltX), float(s.tiltY), float(s.rotation)});
-    renderIncrement();
+    m_pieces.clear();
+    m_covered = 0;
+    m_buildCost = 0;
+    m_clock.start();
+    m_lastBuild = -1000;
+    beginStroke(e, m_preset.smoothing);
+    rebuildPreview();
     update();
 }
 
-void PaintBrushTool::renderIncrement()
+void PaintBrushTool::rebuildPreview()
 {
-    if (m_samples.empty() || m_overlay.isNull()) return;
-    PaintStroke s;
-    s.brush = m_preset;
-    s.color = ed->settings().paintErase ? Color(128, 128, 128, 160) : ed->settings().stroke.paint.mainColor();
-    s.seed = m_seed + uint32_t(m_rendered);
-    const size_t from = m_rendered > 0 ? m_rendered - 1 : 0;
-    s.samples.assign(m_samples.begin() + long(from), m_samples.end());
-    if (s.samples.size() < 2 && m_rendered > 0) return;
-    DabContext ctx;
-    ctx.toDevice = Affine::scale(m_overlay.devicePixelRatio()) * view->timelineToWidget();
-    ctx.doc = &ed->doc();
-    paintStroke(m_overlay, s, ctx);
-    m_rendered = m_samples.size();
+    m_pieces.clear();
+    m_covered = m_points.size();
+    const qint64 t0 = m_clock.elapsed();
+    const std::vector<BrushPoint> path = vectorBrushPath(m_preset, m_points);
+    const FillStyle paint = paintStyle();
+    QColor erase = ui::Theme::p().text;
+    erase.setAlpha(110);
+    for (const BrushPiece& piece : vectorBrushStroke(m_preset, path, paint, m_seed, 0.25 * unitsPerPixel())) {
+        QPainterPath qp = toQPath(piece.region);
+        qp.setFillRule(Qt::WindingFill);
+        m_pieces.push_back({qp, ed->settings().paintErase ? erase : toQColor(piece.fill.mainColor())});
+    }
+    m_lastBuild = m_clock.elapsed();
+    m_buildCost = m_lastBuild - t0;
+    m_tail = QPainterPath();
+}
+
+void PaintBrushTool::rebuildTail()
+{
+    m_tail = QPainterPath();
+    if (m_points.size() <= m_covered) return;
+    const size_t from = m_covered > 0 ? m_covered - 1 : 0;
+    const std::vector<InputSample> tail(m_points.begin() + long(from), m_points.end());
+    m_tail = toQPath(roundSweepOutline(vectorBrushPath(m_preset, tail)));
+    m_tail.setFillRule(Qt::WindingFill);
 }
 
 void PaintBrushTool::move(const ToolEvent& e)
@@ -604,59 +635,46 @@ void PaintBrushTool::move(const ToolEvent& e)
         update();
         return;
     }
-    for (const InputSample& s : addSample(e))
-        m_samples.push_back({s.pos, float(s.pressure), float(s.tiltX), float(s.tiltY), float(s.rotation)});
-    renderIncrement();
+    if (!addSample(e).empty()) {
+        // Keep the exact preview to about a third of the time between events.
+        const qint64 now = m_clock.elapsed();
+        if (now - m_lastBuild >= std::max<qint64>(30, 2 * m_buildCost)) rebuildPreview();
+        else rebuildTail();
+    }
     update();
 }
 
 void PaintBrushTool::release(const ToolEvent&)
 {
     if (!m_active) return;
-    auto tail = m_stab.finish();
-    for (const InputSample& s : tail) m_samples.push_back({s.pos, float(s.pressure), float(s.tiltX), float(s.tiltY), float(s.rotation)});
-    m_active = false;
-    m_points.clear();
-    std::vector<PaintSample> samples = std::move(m_samples);
-    m_samples.clear();
-    m_overlay = QImage();
+    const ToolSettings& s = ed->settings();
+    const std::vector<InputSample> pts = endStroke(m_preset.smoothing);
+    m_pieces.clear();
+    m_tail = QPainterPath();
     update();
-    if (samples.empty()) return;
-    PaintStroke stroke;
-    stroke.brush = m_preset;
-    stroke.color = ed->settings().stroke.paint.mainColor();
-    stroke.seed = m_seed;
-    stroke.erase = ed->settings().paintErase;
-    const int li = m_layer;
-    ed->edit(stroke.erase ? QObject::tr("Paint Eraser") : QObject::tr("Paint Brush"), [&](Document& d) {
-        QString why;
-        Keyframe* k = ed->editableKey(d, li, &why);
-        if (!k) {
-            ed->notify(why);
-            return false;
-        }
-        const PaintElement* top = k->elements.empty() ? nullptr : asPaint(k->elements.back());
-        if (!top && stroke.erase) {
-            ed->notify(QObject::tr("Nothing painted here to erase"));
-            return false;
-        }
-        std::shared_ptr<PaintElement> pe = top ? top->cloneAs<PaintElement>() : std::make_shared<PaintElement>();
-        PaintStroke st = stroke;
-        st.samples = samples;
-        if (top && !top->matrix.isIdentity()) {
-            const Affine inv = top->matrix.inverted();
-            for (PaintSample& s : st.samples) s.pos = inv.map(s.pos);
-        }
-        pe->strokes.push_back(std::move(st));
-        if (top) {
-            k->elements.back() = pe;
-        } else {
-            const Rect b = pe->localBounds();
-            if (!b.isEmpty()) pe->pivot = b.center();
-            k->elements.push_back(pe);
-        }
-        return true;
-    });
+    if (pts.empty()) return;
+    const double upp = unitsPerPixel();
+    const std::vector<BrushPoint> path = vectorBrushPath(m_preset, pts);
+    const FillStyle paint = paintStyle();
+    std::vector<BrushPiece> pieces = vectorBrushStroke(m_preset, path, paint, m_seed, 0.08 * upp);
+    if (pieces.empty()) return;
+    if (s.paintErase) {
+        Region area;
+        for (BrushPiece& piece : pieces)
+            for (Contour& c : piece.region.contours) area.contours.push_back(std::move(c));
+        eraseArea(ed, m_layer, normalizeRegion(area), EraseMode::Normal, nullptr, QObject::tr("Paint Brush Erase"));
+        return;
+    }
+    Rect bounds;
+    for (const BrushPiece& piece : pieces) bounds.include(piece.region.bounds());
+    for (BrushPiece& piece : pieces)
+        if (piece.fill == paint) piece.fill = fitGradient(piece.fill, bounds);
+    const ShapeGraph g = vectorBrushGraph(pieces);
+    OverlayOptions opt;
+    opt.mode = s.paintMode;
+    if (m_insideMask) opt.mask = &*m_insideMask;
+    opt.insideEmpty = m_insideEmpty;
+    commitShape(ed, m_layer, g, QObject::tr("Paint Brush"), opt);
 }
 
 void PaintBrushTool::hover(const ToolEvent& e)
@@ -668,18 +686,34 @@ void PaintBrushTool::hover(const ToolEvent& e)
 
 void PaintBrushTool::paint(QPainter& p)
 {
-    if (!m_overlay.isNull()) p.drawImage(QPointF(0, 0), m_overlay);
+    if (m_active && (!m_pieces.empty() || !m_tail.isEmpty())) {
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setTransform(toQTransform(view->timelineToWidget()), true);
+        p.setPen(Qt::NoPen);
+        for (const PreviewPiece& piece : m_pieces) {
+            p.setBrush(piece.color);
+            p.drawPath(piece.path);
+        }
+        if (!m_tail.isEmpty()) {
+            QColor c = m_pieces.empty() ? toQColor(paintStyle().mainColor()) : m_pieces.back().color;
+            c.setAlphaF(c.alphaF() * 0.55);
+            p.setBrush(c);
+            p.drawPath(m_tail);
+        }
+        p.restore();
+    }
     if (m_hasHover) {
-        const BrushPresetPtr pr = m_preset && m_active ? m_preset : currentPreset();
-        drawBrushCursor(p, toWidget(m_hover), pr->size / unitsPerPixel(), ui::Theme::p().text);
+        const double size = m_active ? m_preset.size : ed->settings().paint.size;
+        drawBrushCursor(p, toWidget(m_hover), size / unitsPerPixel(), ui::Theme::p().text);
     }
 }
 
 void PaintBrushTool::cancel()
 {
     FreehandTool::cancel();
-    m_samples.clear();
-    m_overlay = QImage();
+    m_pieces.clear();
+    m_tail = QPainterPath();
 }
 
 QCursor PaintBrushTool::cursor() const { return Qt::BlankCursor; }

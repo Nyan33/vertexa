@@ -124,6 +124,12 @@ PropertiesPanel::PropertiesPanel(Editor* editor, QWidget* parent) : QScrollArea(
         connect(m_ed, sig, this, &PropertiesPanel::scheduleRebuild);
     connect(m_ed, &Editor::layerChanged, this, &PropertiesPanel::scheduleRebuild);
     connect(m_ed, &Editor::toolChanged, this, &PropertiesPanel::scheduleRebuild);
+    // Another brush picked in the Brushes panel, or resized with [ and ].
+    connect(m_ed, &Editor::settingsChanged, this, [this]() {
+        const VectorBrushPreset& b = m_ed->settings().paint;
+        if (m_ed->tool() == ToolId::PaintBrush && (b.id != m_shownBrush || b.size != m_shownSize))
+            scheduleRebuild();
+    });
     connect(m_ed, &Editor::frameChanged, this, [this]() {
         if (!m_ed->isPlaying()) scheduleRebuild();
     });
@@ -366,18 +372,23 @@ void PropertiesPanel::buildToolOptions()
         break;
     }
     case ToolId::PaintBrush: {
+        m_shownBrush = s.paint.id;
+        m_shownSize = s.paint.size;
         auto* name = new QLabel(QString::fromStdString(s.paint.name), m_content);
         name->setFont(Theme::ui(13, QFont::DemiBold));
-        row(g, tr("Preset"), name);
-        row(g, tr("Size"), number(m_content, s.paintSizeScale * 100, 1, 1000, 0, 1, "%", [this](double v) {
-                m_ed->settings().paintSizeScale = v / 100.0;
+        row(g, tr("Brush"), name);
+        row(g, tr("Size"), number(m_content, s.paint.size, 0.5, 1000, 1, 0.5, " px", [this](double v) {
+                m_ed->settings().paint.size = v;
+                m_shownSize = v;
                 m_ed->emitSettingsChanged();
             }));
-        row(g, tr("Opacity"), number(m_content, s.paint.opacity * 100, 1, 100, 0, 1, "%", [this](double v) { m_ed->settings().paint.opacity = v / 100.0; }));
-        row(g, tr("Flow"), number(m_content, s.paint.flow * 100, 1, 100, 0, 1, "%", [this](double v) { m_ed->settings().paint.flow = v / 100.0; }));
+        row(g, tr("Mode"), combo(m_content, {tr("Paint Normal"), tr("Paint Fills"), tr("Paint Behind"), tr("Paint Selection"), tr("Paint Inside")},
+                                 int(s.paintMode), [this](int i) { m_ed->settings().paintMode = PaintMode(i); }));
         row(g, tr("Smoothing"), number(m_content, s.paint.smoothing, 0, 100, 0, 1, "", [this](double v) { m_ed->settings().paint.smoothing = v; }));
         row(g, {}, check(m_content, tr("Erase with this brush"), s.paintErase, [this](bool b) { m_ed->settings().paintErase = b; }));
-        auto* hint = new QLabel(tr("Pick presets and edit the engine in the Brushes panel."), m_content);
+        objectToggle();
+        auto* hint = new QLabel(tr("Paints vector fills with the stroke colour. Pick brushes, tune them and make "
+                                   "art brushes from a selection in the Brushes panel."), m_content);
         hint->setWordWrap(true);
         hint->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text3.name()));
         row(g, {}, hint);
@@ -431,7 +442,6 @@ void PropertiesPanel::buildSelection()
         switch (els.front()->type()) {
         case ElementType::Instance: what = tr("Symbol Instance"); break;
         case ElementType::Group: what = tr("Group"); break;
-        case ElementType::Paint: what = tr("Texture Paint"); break;
         case ElementType::Shape: what = asShape(els.front())->isObject ? tr("Drawing Object") : tr("Shape"); break;
         case ElementType::Morph: what = tr("Shape"); break;
         }

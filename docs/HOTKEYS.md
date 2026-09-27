@@ -9,7 +9,7 @@ app with its current key.
 | Tool | Key | | Tool | Key |
 |---|---|---|---|---|
 | Selection | `V` | | Brush (fill brush) | `B` |
-| Subselection | `A` | | Paint Brush (texture) | `Y` |
+| Subselection | `A` | | Paint Brush (vector brushes) | `Y` |
 | Free Transform | `Q` | | Pencil | `Shift+Y` |
 | Lasso | `L` | | Eraser | `E` |
 | Pen | `P` | | Paint Bucket | `K` |
@@ -117,6 +117,7 @@ In the timeline panel itself:
 | Zoom In / Out | `Ctrl+=` / `Ctrl+-` |
 | 100% / Fit stage | `Ctrl+1` / `Ctrl+2` |
 | New / Open / Save / Save As | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` |
+| Import FLA / XFL | `Ctrl+R` (Open also accepts `.fla` and `.xfl`) |
 | Export PNG sequence | `Ctrl+Alt+Shift+S` |
 | Export video (FFmpeg) | `Ctrl+Alt+Shift+E` |
 | Keyboard shortcuts | `F1` |

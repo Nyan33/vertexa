@@ -206,14 +206,10 @@ VX_TEST(serialization_roundtrip)
     Document d = docWithSymbol(sym);
     Timeline& tl = d.scenes[0];
     Layer extra = d.makeLayer("Paint");
-    auto paint = std::make_shared<PaintElement>();
-    PaintStroke ps;
-    ps.brush = std::make_shared<BrushPreset>(builtinBrushPresets()[2]);
-    ps.color = Color(10, 20, 30, 200);
-    ps.seed = 42;
-    ps.samples = {{{1.25, 2.5}, 0.5f, 10.f, -5.f, 90.f}, {{3.0, 4.0}, 1.0f, 0.f, 0.f, 0.f}};
-    paint->strokes.push_back(ps);
-    extra.keys[0].elements = {paint, redSquare(1.0 / 3.0, 2.0 / 7.0)};
+    d.brushes.push_back(builtinVectorBrushes()[2]);
+    d.brushes.back().id = "doc.42";
+    extra.keys[0].elements = {makeShapeElement(graphFromRegion(Region::circle({50, 50}, 10), FillStyle::solid(Color(10, 20, 30, 200))), true),
+                              redSquare(1.0 / 3.0, 2.0 / 7.0)};
     extra.blend = BlendMode::Multiply;
     tl.layers.push_back(extra);
     insertFrames(tl.layers[0], 4);
@@ -228,9 +224,7 @@ VX_TEST(serialization_roundtrip)
     CHECK(serializeDocument(back) == data); // lossless
     CHECK(back.symbols.size() == d.symbols.size());
     CHECK(back.scenes[0].layers[1].blend == BlendMode::Multiply);
-    const PaintElement* p = asPaint(back.scenes[0].layers[1].keys[0].elements[0]);
-    CHECK(p && p->strokes.size() == 1 && p->strokes[0].seed == 42);
-    CHECK(*p->strokes[0].brush == builtinBrushPresets()[2]);
+    CHECK(back.brushes.size() == 1 && back.brushes[0].id == "doc.42" && back.brushes[0].name == builtinVectorBrushes()[2].name);
     const ShapeElement* sq = asShape(back.scenes[0].layers[1].keys[0].elements[1]);
     CHECK(sq && sq->graph->edges[0].c.p0.x == 1.0 / 3.0);
 

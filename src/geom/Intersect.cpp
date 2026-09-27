@@ -30,6 +30,48 @@ bool refineNewton(const Cubic& a, const Cubic& b, double& s, double& t, double a
     return F.length() <= accept;
 }
 
+/// Robust fallback for crossings Newton cannot resolve (curves meeting at a
+/// very small angle, often right next to a piece end): bisection on the
+/// signed distance from b(t) to curve a around the candidate.
+bool refineBisect(const Cubic& a, const Cubic& b, double& s, double& t, double accept)
+{
+    auto g = [&](double tt, double& ss) {
+        const Vec2 q = b.eval(tt);
+        ss = a.nearest(q);
+        Vec2 d = a.d1(ss);
+        if (d.lengthSq() < 1e-30) d = a.eval(std::min(1.0, ss + 1e-6)) - a.eval(std::max(0.0, ss - 1e-6));
+        return cross(d.normalized(), q - a.eval(ss));
+    };
+    for (double w : {0.02, 0.1, 0.3}) {
+        double lo = std::max(0.0, t - w), hi = std::min(1.0, t + w);
+        double sl, sh;
+        double gl = g(lo, sl), gh = g(hi, sh);
+        if (gl == 0.0) { t = lo; s = sl; return distance(a.eval(s), b.eval(t)) <= accept; }
+        if (gh == 0.0) { t = hi; s = sh; return distance(a.eval(s), b.eval(t)) <= accept; }
+        if ((gl > 0) == (gh > 0)) continue;
+        for (int it = 0; it < 90; ++it) {
+            const double mid = 0.5 * (lo + hi);
+            double sm;
+            const double gm = g(mid, sm);
+            if ((gm > 0) == (gl > 0)) {
+                lo = mid;
+                gl = gm;
+            } else {
+                hi = mid;
+            }
+        }
+        const double tt = 0.5 * (lo + hi);
+        double ss;
+        g(tt, ss);
+        if (distance(a.eval(ss), b.eval(tt)) <= accept) {
+            s = ss;
+            t = tt;
+            return true;
+        }
+    }
+    return false;
+}
+
 void snapParam(double& t)
 {
     if (t < 1e-12) t = 0.0;
@@ -122,13 +164,23 @@ void subdivide(const Cubic& a, double a0, double a1, const Cubic& b, double b0, 
     const double fa = a.flatness(), fb = b.flatness();
     if ((fa <= flatTol && fb <= flatTol) || depth >= 48) {
         double s, t;
-        if (intersectSegments(a.p0, a.p3, b.p0, b.p3, s, t)) {
-            const double slack = 1e-3;
-            if (s >= -slack && s <= 1.0 + slack && t >= -slack && t <= 1.0 + slack)
-                cands.push_back({a0 + std::clamp(s, 0.0, 1.0) * (a1 - a0), b0 + std::clamp(t, 0.0, 1.0) * (b1 - b0)});
-        } else if (depth >= 48) {
-            cands.push_back({0.5 * (a0 + a1), 0.5 * (b0 + b1)});
+        const double slack = 1e-3;
+        if (intersectSegments(a.p0, a.p3, b.p0, b.p3, s, t) && s >= -slack && s <= 1.0 + slack && t >= -slack &&
+            t <= 1.0 + slack) {
+            cands.push_back({a0 + std::clamp(s, 0.0, 1.0) * (a1 - a0), b0 + std::clamp(t, 0.0, 1.0) * (b1 - b0)});
+            return;
         }
+        // Nearly parallel pieces closer than the flatness tolerance: the chords
+        // say nothing about a crossing, so let the refinement decide.
+        auto segDist = [](Vec2 p, Vec2 q0, Vec2 q1) {
+            const Vec2 d = q1 - q0;
+            const double l2 = d.lengthSq();
+            const double u = l2 > 0 ? std::clamp(dot(p - q0, d) / l2, 0.0, 1.0) : 0.0;
+            return distance(p, q0 + d * u);
+        };
+        const double gap = std::min({segDist(a.p0, b.p0, b.p3), segDist(a.p3, b.p0, b.p3), segDist(b.p0, a.p0, a.p3),
+                                     segDist(b.p3, a.p0, a.p3)});
+        if (depth >= 48 || gap <= 4.0 * flatTol + eps) cands.push_back({0.5 * (a0 + a1), 0.5 * (b0 + b1)});
         return;
     }
     const double am = 0.5 * (a0 + a1), bm = 0.5 * (b0 + b1);
@@ -258,8 +310,13 @@ void intersectCurves(const Cubic& a, const Cubic& b, std::vector<CurveHit>& out,
         for (Candidate c : cands) {
             double s = c.s, t = c.t;
             if (!refineNewton(a, b, s, t, accept)) {
-                // Near-tangential touch: accept the subdivision estimate if close.
-                if (distance(a.eval(s), b.eval(t)) > eps) continue;
+                double s2 = c.s, t2 = c.t;
+                if (refineBisect(a, b, s2, t2, accept)) {
+                    s = s2;
+                    t = t2;
+                } else if (distance(a.eval(s), b.eval(t)) > eps) {
+                    continue; // near-tangential touch: keep the estimate only if close
+                }
             }
             snapParam(s); snapParam(t);
             out.push_back({s, t, (a.eval(s) + b.eval(t)) * 0.5, false});

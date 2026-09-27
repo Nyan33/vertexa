@@ -275,7 +275,7 @@ void MainWindow::createActions()
         switch (ed->tool()) {
         case ToolId::Brush: s.brushSize = std::clamp(s.brushSize * k, 1.0, 400.0); break;
         case ToolId::Eraser: s.eraserSize = std::clamp(s.eraserSize * k, 1.0, 400.0); break;
-        case ToolId::PaintBrush: s.paintSizeScale = std::clamp(s.paintSizeScale * k, 0.01, 20.0); break;
+        case ToolId::PaintBrush: s.paint.size = std::clamp(s.paint.size * k, 0.5, 1000.0); break;
         default: return;
         }
         ed->emitSettingsChanged();

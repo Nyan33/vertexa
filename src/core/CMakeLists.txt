@@ -4,8 +4,8 @@ add_library(vx_core STATIC
     BlendMode.h
     ShapeGraph.h ShapeGraph.cpp
     ShapeOps.h ShapeOps.cpp
-    BrushPreset.h BrushPreset.cpp
     Element.h
+    VectorBrush.h VectorBrush.cpp
     Easing.h Easing.cpp
     Filter.h Filter.cpp
     Timeline.h Timeline.cpp

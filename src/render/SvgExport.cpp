@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "SvgExport.h"
-#include "DabEngine.h"
 
 #include "core/Evaluate.h"
 
-#include <QBuffer>
 #include <QFile>
-#include <QImage>
 #include <QRegularExpression>
 #include <QTextStream>
 
@@ -120,28 +117,6 @@ public:
         body += "</g>";
     }
 
-    void paintElement(const PaintElement& p, const Affine& m, const ColorTransform& ct)
-    {
-        const Rect b = p.localBounds();
-        if (b.isEmpty()) return;
-        const double scale = 2.0;
-        const int w = std::max(1, int(std::ceil(b.width() * scale))), h = std::max(1, int(std::ceil(b.height() * scale)));
-        if (double(w) * h > 64e6) return;
-        QImage img(w, h, QImage::Format_ARGB32_Premultiplied);
-        img.fill(0);
-        DabContext ctx;
-        ctx.toDevice = Affine::scale(scale) * Affine::translate(-b.x0, -b.y0);
-        ctx.color = ct;
-        ctx.doc = &m_doc;
-        vx::paintElement(img, p, ctx);
-        QByteArray png;
-        QBuffer buf(&png);
-        buf.open(QIODevice::WriteOnly);
-        img.save(&buf, "PNG");
-        body += QString("<g%1><image x=\"%2\" y=\"%3\" width=\"%4\" height=\"%5\" href=\"data:image/png;base64,%6\"/></g>")
-                    .arg(matrixAttr(m), num(b.x0), num(b.y0), num(w / scale), num(h / scale), QString::fromLatin1(png.toBase64()));
-    }
-
     /// SVG equivalent of Animate filters (outer shadows and glows, blur, adjust
     /// colour); returns the filter id or an empty string.
     QString svgFilter(const FilterList& filters)
@@ -202,7 +177,6 @@ public:
         case ElementType::Group:
             for (const ElementPtr& c : static_cast<const GroupElement&>(e).children) element({c, it.localFrame}, m, ct, depth);
             break;
-        case ElementType::Paint: paintElement(static_cast<const PaintElement&>(e), m, ct); break;
         case ElementType::Instance: {
             const auto& in = static_cast<const InstanceElement&>(e);
             const Symbol* s = m_doc.symbol(in.symbolId);

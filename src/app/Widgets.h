@@ -4,7 +4,7 @@
 // response curve editor, segmented toggles and expressive section titles.
 #pragma once
 
-#include "core/BrushPreset.h"
+#include "core/VectorBrush.h"
 #include "core/Style.h"
 
 #include <QColor>

@@ -6,8 +6,8 @@ the ones below it:
 ```
  vertexa (executable)
    └─ vx_app     Qt Widgets: Editor, StageView, tools, panels, dialogs
-       └─ vx_render   rasteriser, blend modes, dab engine, renderer, SVG
-           └─ vx_core     document model, shape graph, timelines, tweens, .vtx
+       └─ vx_render   rasteriser, blend modes, filters, renderer, SVG
+           └─ vx_core     document model, shape graph, timelines, tweens, .vtx, FLA import
                └─ vx_geom     exact 2D geometry (standard C++ only)
 ```
 
@@ -78,16 +78,59 @@ layer are simply one graph.
 `renderData()` converts a graph into fill paths (closed contours per style)
 and stroke paths, cached on the graph until it is modified.
 
+### Vector brushes: `VectorBrush`
+
+The Paint Brush never produces pixels: `vectorBrushStroke()` turns a centre
+line with half widths (`vectorBrushPath()` applies size, pressure curve and
+minimum size) into coloured regions, and `vectorBrushGraph()` makes them an
+ordinary shape graph that the tool merges like any other drawing.
+
+- *Art* and *Pattern* brushes build a moving frame along the resampled path
+  (arc length + smoothed normals) and warp the artwork's contours into it:
+  the artwork's x runs along the path, its y across the local width. Pattern
+  brushes split the path into tiles whose length follows the artwork's aspect.
+  Warped contours are flattened finely and refitted with `fitCurves`.
+- *Textured* brushes take the exact swept area, move its boundary along the
+  normal by canvas-anchored value noise (`brushNoise`) and punch grain holes
+  on a hashed canvas grid (one hole per cell, so holes never overlap; holes
+  clear of the edge are added as reversed contours, only edge-crossing ones go
+  through a boolean subtraction).
+- *Scatter* brushes place hashed ellipse dabs along the frame and union them.
+- `makeArtBrush()` / `linesToFills()` make a brush from a selection; brushes
+  made that way are stored in `Document::brushes` and saved in the `.vtx`.
+
+### Filters: `Filter`
+
+`Filter` holds the seven Animate filters with their parameters and SWF
+numbering; `lerpFilters` interpolates filter lists in classic tweens and
+`filterMargin` tells the renderer how far a filter reaches outside the
+object.
+
+### Import: `io/`
+
+- `Cfb` — an OLE2 / Compound File Binary reader (FAT, DIFAT, mini stream,
+  directory tree).
+- `FlaBinary` — binary `.fla` (Flash 5 – CS4): walks the MFC `CArchive` object
+  streams (`CPicPage` → `CPicLayer` → `CPicFrame` → `CPicShape` /
+  `CPicSymbol` …) and maps them onto the Vertexa model. The layouts are in
+  [FLA_FORMAT.md](FLA_FORMAT.md).
+- `Zip` + `Xfl` — a small ZIP reader with its own inflate, and the XFL reader
+  (`DOMDocument.xml`, `LIBRARY/*.xml`, edge strings, gradients, filters,
+  tweens). Which side of an edge `fillStyle0` is on is decided per document by
+  a topology vote.
+- `importFla()` detects the format and returns an `ImportReport` listing
+  anything that could not be imported exactly.
+
 ### Elements, timelines, documents
 
 - `Element.h` — immutable elements shared through `shared_ptr<const Element>`:
   `ShapeElement` (merge shape or drawing object), `InstanceElement` (symbol
-  instance with colour effect, blend mode, graphic loop), `GroupElement`,
-  `PaintElement` (texture-brush strokes as data), `MorphElement` (baked shape
-  tween frame).
+  instance with its own behaviour, colour effect, blend mode, filters and
+  graphic loop), `GroupElement`, `MorphElement` (baked shape tween frame).
 - `Timeline.h` — layers (normal, guide, mask, folder; parent links), keyframe
   spans, tween settings, labels.
-- `Document.h` — scenes, symbols (movie clip, graphic, button), stage settings.
+- `Document.h` — scenes, symbols (movie clip, graphic, button), vector brushes
+  made in the document, stage settings.
   A `Document` is a value: copying it is cheap because elements are shared,
   which makes undo a simple snapshot.
 
@@ -120,16 +163,17 @@ and stroke paths, cached on the graph until it is modified.
 - `Blend` — premultiplied compositing with all Animate blend modes plus the
   Krita/W3C ones. As in Flash, a blended movie clip is rendered into its own
   buffer first, and Alpha / Erase only act inside a parent set to Layer.
-- `DabEngine` — a Krita-like brush engine: stamps tip images along a stroke with
-  spacing, pressure curves for size / opacity / flow, rotation from tilt or
-  stroke direction, size / opacity / rotation jitter, scatter, wash vs.
-  build-up, and textures anchored to the canvas (multiply, subtract, height).
-- `BrushResources` — built-in procedural tips and paper textures, `.gbr`/image
-  import.
+- `Filters` — the filter stack on an isolated buffer: separable box blurs (one
+  pass per quality step, like Flash), shadow / glow / bevel built from the
+  blurred alpha, gradient variants through a 256-entry ramp, colour matrix for
+  Adjust Color.
 - `Renderer` — walks evaluated items, renders nested symbols with isolation,
-  masks, outline mode, onion skins and the edit-in-place dimming; caches
-  rendered paint strokes by element and sub-pixel matrix.
-- `SvgExport` — writes a frame as SVG with exact cubic paths.
+  masks, outline mode, onion skins and the edit-in-place dimming. A movie clip
+  with filters or a blend mode is rendered into a buffer bounded by its
+  symbol bounds plus the filter margin, filtered, colour-transformed and then
+  composited.
+- `SvgExport` — writes a frame as SVG with exact cubic paths and SVG filter
+  equivalents.
 
 ## vx_app
 
@@ -145,7 +189,9 @@ and stroke paths, cached on the graph until it is modified.
 - `tools/` — one class per tool; `DrawTools` (brush, eraser, pencil, paint
   brush), `BasicTools` (shapes, pen, bucket, ink bottle, eyedropper, hand, zoom),
   `SelectTools` (selection, subselection, free transform, lasso).
-- `panels/` — Tools, Timeline, Properties, Library, Color, Brushes.
+- `panels/` — Tools, Timeline, Properties (with the filter stack and Animate's
+  grouped blend list), Library, Color, Brushes (vector brush presets, per-kind
+  editor, art / pattern brush from selection).
 - `Theme`, `Icons`, `Widgets` — the design system: Inter / Inter Display,
   flat dark and light palettes with a single warm accent, procedural icons and
   small animated controls (scrubbable numbers, segmented buttons, colour
@@ -156,7 +202,10 @@ and stroke paths, cached on the graph until it is modified.
 `tests/` has one executable per library. `test_geom` and `test_shape` check the
 kernel (intersections, arrangement labelling, booleans, fitting, the brush
 outline, merge/erase/bucket semantics); `test_core` covers timelines, tweens,
-symbols and serialization; `test_render` compares rendered pixels; `test_app`
+symbols and serialization; `test_brush` the vector brushes; `test_fla` the
+OLE2 and ZIP readers and both FLA importers on synthetic files (set
+`VERTEXA_FLA_SAMPLES` to a folder of real `.fla` files to import those too);
+`test_render` compares rendered pixels, filters included; `test_app`
 drives the real `StageView` with synthetic mouse events (drawing, erasing,
 selecting, bending, tweening, entering symbols) on the offscreen platform.
 

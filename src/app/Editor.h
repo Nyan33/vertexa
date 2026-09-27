@@ -81,9 +81,9 @@ struct ToolSettings {
     PencilMode pencilMode = PencilMode::Smooth;
     double pencilSmoothing = 50.0;
 
-    // Paint brush (Krita-like texture brushes)
-    BrushPreset paint;
-    double paintSizeScale = 1.0;
+    // Paint brush (vector art, pattern, textured and scatter brushes)
+    VectorBrushPreset paint;
+    PaintMode paintMode = PaintMode::Normal;
     bool paintErase = false;
 
     // Tablet

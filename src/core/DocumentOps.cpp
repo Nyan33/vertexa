@@ -75,11 +75,6 @@ ElementPtr colorElement(const ElementPtr& e, const ColorTransform& ct)
         for (ElementPtr& ch : c->children) ch = colorElement(ch, ct);
         return c;
     }
-    case ElementType::Paint: {
-        auto c = e->cloneAs<PaintElement>();
-        for (PaintStroke& s : c->strokes) s.color = ct.apply(s.color);
-        return c;
-    }
     case ElementType::Morph: return e;
     }
     return e;
@@ -98,10 +93,10 @@ void forEachTimeline(Document& doc, const std::function<void(Timeline&)>& fn)
     for (Symbol& s : doc.symbols) fn(s.timeline);
 }
 
-bool containsShapeOrPaint(const Keyframe& k)
+bool containsShape(const Keyframe& k)
 {
     for (const ElementPtr& e : k.elements)
-        if (e->type() == ElementType::Shape || e->type() == ElementType::Paint) return true;
+        if (e->type() == ElementType::Shape) return true;
     return false;
 }
 
@@ -183,7 +178,6 @@ std::vector<ElementPtr> breakApart(const Document& doc, const ElementPtr& e, int
         if (m.data) out.push_back(makeShapeElement(graphFromRenderData(*m.data).transformed(m.matrix), false));
         return out;
     }
-    case ElementType::Paint: return {e};
     }
     return out;
 }
@@ -227,7 +221,7 @@ bool createClassicTween(Document& doc, Timeline& tl, int layerIndex, int frame)
     const int ki = l.keyIndexAt(frame);
     if (ki < 0) return false;
     auto symbolize = [&](Keyframe& k) {
-        if (k.elements.empty() || !containsShapeOrPaint(k)) return;
+        if (k.elements.empty() || !containsShape(k)) return;
         const Rect b = boundsOf(doc, k.elements);
         auto inst = convertToSymbol(doc, k.elements, "Tween " + std::to_string(tweenSymbolCounter(doc)),
                                     SymbolType::Graphic, b.isEmpty() ? Vec2{} : b.center());

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Vertexa — freehand tools: Brush (fill based, like Animate's Brush), Eraser,
-// Pencil (stroke based) and Paint Brush (Krita-like texture brushes).
+// Pencil (stroke based) and Paint Brush (vector art, pattern, textured and
+// scatter brushes; the result is always vector fills).
 #pragma once
 
 #include "Tool.h"
+#include "core/VectorBrush.h"
 #include "geom/Smooth.h"
 
-#include <QImage>
+#include <QElapsedTimer>
 #include <QPainterPath>
 
 namespace vx::app {
@@ -99,12 +101,22 @@ public:
     QCursor cursor() const override;
 
 private:
-    BrushPresetPtr currentPreset() const;
-    void renderIncrement();
-    std::vector<PaintSample> m_samples; ///< timeline space
-    QImage m_overlay;                   ///< live preview (device pixels)
-    size_t m_rendered = 0;
-    BrushPresetPtr m_preset;
+    struct PreviewPiece {
+        QPainterPath path; ///< timeline space
+        QColor color;
+    };
+    void rebuildPreview();
+    void rebuildTail();
+    FillStyle paintStyle() const;
+
+    VectorBrushPreset m_preset;
+    std::vector<PreviewPiece> m_pieces; ///< exact vector preview
+    size_t m_covered = 0;               ///< samples the exact preview covers
+    QPainterPath m_tail;                ///< quick outline of the newer samples
+    QElapsedTimer m_clock;
+    qint64 m_lastBuild = 0, m_buildCost = 0;
+    std::optional<Region> m_insideMask;
+    bool m_insideEmpty = false;
     int m_layer = -1;
     uint32_t m_seed = 1;
 };
@@ -112,5 +124,8 @@ private:
 /// Commits a finished shape (merge drawing or drawing object) on a layer.
 bool commitShape(Editor* ed, int layerIndex, const ShapeGraph& g, const QString& label,
                  const OverlayOptions& opt = {});
+
+/// Erases `r` (timeline space) from the shapes of a layer's current keyframe.
+bool eraseArea(Editor* ed, int layerIndex, const Region& r, EraseMode mode, const Region* mask, const QString& label);
 
 } // namespace vx::app

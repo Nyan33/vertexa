@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Vertexa — Brushes panel: Krita-like preset grid and brush engine editor
-// (tip, spacing, sensor curves, jitter, texture), .gbr/.png tip import and
-// user presets.
+// Vertexa — Brushes panel: vector brush presets (built-in, document and user),
+// a per-kind brush editor and Animate-style art / pattern brushes made from
+// the selection.
 #pragma once
 
 #include "../Editor.h"
@@ -10,35 +10,40 @@
 
 class QGridLayout;
 class QLabel;
+class QTimer;
 class QVBoxLayout;
 
 namespace vx::app {
+
+/// Renders a sample stroke of a brush (an S curve with a pressure swell),
+/// fitted into `size` logical pixels.
+QImage vectorBrushPreview(const VectorBrushPreset& p, const FillStyle& paint, QSize size, qreal dpr);
 
 class PresetGrid : public QWidget {
     Q_OBJECT
 public:
     explicit PresetGrid(Editor* editor, QWidget* parent = nullptr);
-    void setPresets(std::vector<BrushPreset> presets);
-    const std::vector<BrushPreset>& presets() const { return m_presets; }
+    void setPresets(std::vector<VectorBrushPreset> presets);
+    const std::vector<VectorBrushPreset>& presets() const { return m_presets; }
+    void invalidatePreviews();
     int heightForWidth(int w) const override;
     bool hasHeightForWidth() const override { return true; }
     QSize sizeHint() const override { return {240, heightForWidth(240)}; }
 
 signals:
-    void picked(const BrushPreset& p);
+    void picked(const VectorBrushPreset& p);
 
 protected:
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void leaveEvent(QEvent*) override;
-    void resizeEvent(QResizeEvent*) override;
 
 private:
     QRectF tile(int i) const;
     Editor* m_ed;
-    std::vector<BrushPreset> m_presets;
-    std::vector<QImage> m_previews;
+    std::vector<VectorBrushPreset> m_presets;
+    std::vector<QImage> m_previews; ///< rendered lazily
     int m_hover = -1;
 };
 
@@ -47,11 +52,20 @@ class BrushPanel : public QScrollArea {
 public:
     explicit BrushPanel(Editor* editor, QWidget* parent = nullptr);
 
+protected:
+    void resizeEvent(QResizeEvent* e) override;
+
 private:
     void rebuildEditor();
+    void scheduleRebuild();
     void refreshPreview();
+    void reloadPresets();
     void loadUserPresets();
     void saveUserPresets();
+    void saveAsPreset();
+    void createFromSelection(bool pattern);
+    void deleteCurrent();
+    void pick(const VectorBrushPreset& p);
     QGridLayout* section(const QString& title);
     void row(QGridLayout* g, const QString& label, QWidget* w);
 
@@ -62,7 +76,12 @@ private:
     QLabel* m_preview = nullptr;
     QWidget* m_editor = nullptr;
     QVBoxLayout* m_editorLayout = nullptr;
-    std::vector<BrushPreset> m_user;
+    QTimer* m_previewTimer = nullptr;
+    std::vector<VectorBrushPreset> m_user;
+    std::vector<std::string> m_docBrushes; ///< ids of the document's brushes shown
+    std::string m_shownId;
+    double m_shownSize = 0.0;
+    bool m_rebuildPending = false;
 };
 
 } // namespace vx::app

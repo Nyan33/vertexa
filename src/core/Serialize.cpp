@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Serialize.h"
+#include "ShapeOps.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -78,9 +79,6 @@ const auto kRotate = VX_NAMES("none", "auto", "cw", "ccw");
 const auto kLabel = VX_NAMES("name", "comment", "anchor");
 const auto kLayerType = VX_NAMES("normal", "guide", "mask", "folder");
 const auto kColorEffect = VX_NAMES("none", "brightness", "tint", "alpha", "advanced");
-const auto kTipType = VX_NAMES("auto", "image");
-const auto kAutoShape = VX_NAMES("circle", "square");
-const auto kTexMode = VX_NAMES("multiply", "subtract", "height");
 
 // --- filters ----------------------------------------------------------------------
 
@@ -369,44 +367,6 @@ QJsonObject elementToJson(const Element& e)
         o["children"] = children;
         break;
     }
-    case ElementType::Paint: {
-        const auto& p = static_cast<const PaintElement&>(e);
-        o["type"] = "paint";
-        std::map<const BrushPreset*, int> brushIndex;
-        QJsonArray brushes, strokes;
-        for (const PaintStroke& s : p.strokes) {
-            int bi = -1;
-            if (s.brush) {
-                auto it = brushIndex.find(s.brush.get());
-                if (it == brushIndex.end()) {
-                    bi = int(brushes.size());
-                    brushIndex[s.brush.get()] = bi;
-                    brushes.append(brushPresetToJson(*s.brush));
-                } else {
-                    bi = it->second;
-                }
-            }
-            QJsonObject so;
-            so["brush"] = bi;
-            so["color"] = colorToString(s.color);
-            so["seed"] = double(s.seed);
-            if (s.erase) so["erase"] = true;
-            QJsonArray samples;
-            for (const PaintSample& ps : s.samples) {
-                samples.append(ps.pos.x);
-                samples.append(ps.pos.y);
-                samples.append(double(ps.pressure));
-                samples.append(double(ps.tiltX));
-                samples.append(double(ps.tiltY));
-                samples.append(double(ps.rotation));
-            }
-            so["samples"] = samples;
-            strokes.append(so);
-        }
-        o["brushes"] = brushes;
-        o["strokes"] = strokes;
-        break;
-    }
     case ElementType::Morph: o["type"] = "morph"; break;
     }
     return o;
@@ -444,32 +404,42 @@ ElementPtr elementFromJson(const QJsonObject& o)
             if (ElementPtr c = elementFromJson(v.toObject())) g->children.push_back(c);
         e = g;
     } else if (type == "paint") {
-        auto p = std::make_shared<PaintElement>();
-        std::vector<BrushPresetPtr> brushes;
-        for (const QJsonValue& v : o["brushes"].toArray())
-            brushes.push_back(std::make_shared<BrushPreset>(brushPresetFromJson(v.toObject())));
+        // Raster texture-brush strokes of Vertexa 0.1 become a drawing object
+        // painted with a textured vector brush of the same size and colour.
+        const QJsonArray brushes = o["brushes"].toArray();
+        ShapeGraph g;
         for (const QJsonValue& v : o["strokes"].toArray()) {
             const QJsonObject so = v.toObject();
-            PaintStroke s;
-            const int bi = so["brush"].toInt(-1);
-            if (bi >= 0 && bi < int(brushes.size())) s.brush = brushes[bi];
-            else s.brush = std::make_shared<BrushPreset>(builtinBrushPresets().front());
-            s.color = colorFromValue(so["color"]);
-            s.seed = uint32_t(so["seed"].toDouble(1));
-            s.erase = so["erase"].toBool();
+            const QJsonObject bo = brushes.at(so["brush"].toInt(-1)).toObject();
+            VectorBrushPreset b = *builtinVectorBrush("chalk");
+            b.size = bo["size"].toDouble(b.size);
+            b.pressureSize = bo["pressureSize"].toBool(true);
+            b.minSize = bo["minSize"].toDouble(b.minSize);
+            std::vector<InputSample> samples;
             const QJsonArray a = so["samples"].toArray();
             for (int i = 0; i + 5 < a.size(); i += 6) {
-                PaintSample ps;
-                ps.pos = {a[i].toDouble(), a[i + 1].toDouble()};
-                ps.pressure = float(a[i + 2].toDouble());
-                ps.tiltX = float(a[i + 3].toDouble());
-                ps.tiltY = float(a[i + 4].toDouble());
-                ps.rotation = float(a[i + 5].toDouble());
-                s.samples.push_back(ps);
+                InputSample q;
+                q.pos = {a[i].toDouble(), a[i + 1].toDouble()};
+                q.pressure = a[i + 2].toDouble();
+                samples.push_back(q);
             }
-            p->strokes.push_back(std::move(s));
+            const std::vector<BrushPiece> pieces =
+                vectorBrushStroke(b, vectorBrushPath(b, samples), FillStyle::solid(colorFromValue(so["color"])), 1, 0.05);
+            if (so["erase"].toBool()) {
+                Region area;
+                for (const BrushPiece& piece : pieces)
+                    for (const Contour& c : piece.region.contours) area.contours.push_back(c);
+                if (!g.isEmpty() && !area.isEmpty()) g = erase(g, normalizeRegion(area), EraseMode::Normal);
+                continue;
+            }
+            const ShapeGraph sg = vectorBrushGraph(pieces);
+            g = g.isEmpty() ? sg : overlay(g, sg);
         }
-        e = p;
+        if (g.isEmpty()) return nullptr;
+        auto sh = std::make_shared<ShapeElement>();
+        sh->isObject = true;
+        sh->graph = std::make_shared<ShapeGraph>(std::move(g));
+        e = sh;
     } else {
         return nullptr;
     }
@@ -627,27 +597,6 @@ Symbol symbolFromJson(const QJsonObject& o)
     return s;
 }
 
-QJsonObject imageToJson(const GrayImage& img)
-{
-    QJsonObject o;
-    o["width"] = img.width;
-    o["height"] = img.height;
-    const QByteArray raw(reinterpret_cast<const char*>(img.pixels.data()), qsizetype(img.pixels.size()));
-    o["data"] = QString::fromLatin1(qCompress(raw, 9).toBase64());
-    return o;
-}
-
-GrayImagePtr imageFromJson(const QJsonObject& o)
-{
-    auto img = std::make_shared<GrayImage>();
-    img->width = o["width"].toInt();
-    img->height = o["height"].toInt();
-    const QByteArray raw = qUncompress(QByteArray::fromBase64(o["data"].toString().toLatin1()));
-    if (raw.size() != qsizetype(img->width) * img->height) return nullptr;
-    img->pixels.assign(raw.begin(), raw.end());
-    return img;
-}
-
 void collectSymbols(const Document& doc, const std::vector<ElementPtr>& els, std::set<std::string>& out)
 {
     for (const ElementPtr& e : els) {
@@ -702,93 +651,66 @@ ShapeGraph shapeGraphFromJson(const QJsonObject& o)
     return g;
 }
 
-QJsonObject brushPresetToJson(const BrushPreset& p)
+const auto kBrushKind = VX_NAMES("art", "pattern", "textured", "scatter");
+
+QJsonObject vectorBrushToJson(const VectorBrushPreset& p)
 {
     QJsonObject o;
     o["id"] = QString::fromStdString(p.id);
     o["name"] = QString::fromStdString(p.name);
-    o["category"] = QString::fromStdString(p.category);
-    o["tipType"] = enumName(p.tipType, kTipType);
-    o["autoShape"] = enumName(p.autoShape, kAutoShape);
-    o["hardness"] = p.hardness;
-    o["roundness"] = p.roundness;
-    o["angle"] = p.angle;
-    o["tipImage"] = QString::fromStdString(p.tipImage);
-    o["tipDensity"] = p.tipDensity;
+    o["kind"] = enumName(p.kind, kBrushKind);
     o["size"] = p.size;
-    o["spacing"] = p.spacing;
-    o["opacity"] = p.opacity;
-    o["flow"] = p.flow;
-    o["buildUp"] = p.buildUp;
     o["pressureSize"] = p.pressureSize;
-    o["sizeCurve"] = curveToJson(p.sizeCurve);
     o["minSize"] = p.minSize;
-    o["pressureOpacity"] = p.pressureOpacity;
-    o["opacityCurve"] = curveToJson(p.opacityCurve);
-    o["pressureFlow"] = p.pressureFlow;
-    o["flowCurve"] = curveToJson(p.flowCurve);
-    o["tiltAngle"] = p.tiltAngle;
-    o["followDirection"] = p.followDirection;
-    o["rotationJitter"] = p.rotationJitter;
-    o["sizeJitter"] = p.sizeJitter;
-    o["opacityJitter"] = p.opacityJitter;
-    o["scatter"] = p.scatter;
-    o["count"] = p.count;
-    o["textureEnabled"] = p.textureEnabled;
-    o["texture"] = QString::fromStdString(p.texture);
-    o["textureScale"] = p.textureScale;
-    o["textureStrength"] = p.textureStrength;
-    o["textureBrightness"] = p.textureBrightness;
-    o["textureContrast"] = p.textureContrast;
-    o["textureInvert"] = p.textureInvert;
-    o["textureMode"] = enumName(p.textureMode, kTexMode);
-    o["blend"] = QString::fromUtf8(blendModeId(p.blend).data());
     o["smoothing"] = p.smoothing;
+    if (!p.sizeCurve.isLinear()) o["sizeCurve"] = curveToJson(p.sizeCurve);
+    // Artwork is kept whatever the kind, so switching kinds back loses nothing.
+    if (p.art) {
+        o["art"] = shapeGraphToJson(*p.art);
+        o["colorize"] = p.colorize;
+        o["patternGap"] = p.patternGap;
+        o["stretchToFit"] = p.stretchToFit;
+    }
+    switch (p.kind) {
+    case VectorBrushKind::Art:
+    case VectorBrushKind::Pattern: break;
+    case VectorBrushKind::Textured:
+        o["roughness"] = p.roughness;
+        o["roughScale"] = p.roughScale;
+        o["grain"] = p.grain;
+        o["grainSize"] = p.grainSize;
+        break;
+    case VectorBrushKind::Scatter:
+        o["dabSize"] = p.dabSize;
+        o["density"] = p.density;
+        o["scatter"] = p.scatter;
+        break;
+    }
     return o;
 }
 
-BrushPreset brushPresetFromJson(const QJsonObject& o)
+VectorBrushPreset vectorBrushFromJson(const QJsonObject& o)
 {
-    BrushPreset p;
+    VectorBrushPreset p;
     p.id = o["id"].toString().toStdString();
-    p.name = o["name"].toString("Brush").toStdString();
-    p.category = o["category"].toString().toStdString();
-    p.tipType = enumFrom(o["tipType"], kTipType, TipType::Auto);
-    p.autoShape = enumFrom(o["autoShape"], kAutoShape, AutoTipShape::Circle);
-    p.hardness = o["hardness"].toDouble(p.hardness);
-    p.roundness = o["roundness"].toDouble(p.roundness);
-    p.angle = o["angle"].toDouble(p.angle);
-    p.tipImage = o["tipImage"].toString().toStdString();
-    p.tipDensity = o["tipDensity"].toDouble(1.0);
+    p.name = o["name"].toString().toStdString();
+    p.kind = enumFrom(o["kind"], kBrushKind, VectorBrushKind::Textured);
     p.size = o["size"].toDouble(p.size);
-    p.spacing = o["spacing"].toDouble(p.spacing);
-    p.opacity = o["opacity"].toDouble(p.opacity);
-    p.flow = o["flow"].toDouble(p.flow);
-    p.buildUp = o["buildUp"].toBool(p.buildUp);
-    p.pressureSize = o["pressureSize"].toBool(p.pressureSize);
-    p.sizeCurve = curveFromJson(o["sizeCurve"]);
+    p.pressureSize = o["pressureSize"].toBool(true);
     p.minSize = o["minSize"].toDouble(p.minSize);
-    p.pressureOpacity = o["pressureOpacity"].toBool(p.pressureOpacity);
-    p.opacityCurve = curveFromJson(o["opacityCurve"]);
-    p.pressureFlow = o["pressureFlow"].toBool(p.pressureFlow);
-    p.flowCurve = curveFromJson(o["flowCurve"]);
-    p.tiltAngle = o["tiltAngle"].toBool(p.tiltAngle);
-    p.followDirection = o["followDirection"].toBool(p.followDirection);
-    p.rotationJitter = o["rotationJitter"].toDouble(p.rotationJitter);
-    p.sizeJitter = o["sizeJitter"].toDouble(p.sizeJitter);
-    p.opacityJitter = o["opacityJitter"].toDouble(p.opacityJitter);
-    p.scatter = o["scatter"].toDouble(p.scatter);
-    p.count = std::max(1, o["count"].toInt(p.count));
-    p.textureEnabled = o["textureEnabled"].toBool(p.textureEnabled);
-    p.texture = o["texture"].toString(QString::fromStdString(p.texture)).toStdString();
-    p.textureScale = o["textureScale"].toDouble(p.textureScale);
-    p.textureStrength = o["textureStrength"].toDouble(p.textureStrength);
-    p.textureBrightness = o["textureBrightness"].toDouble(p.textureBrightness);
-    p.textureContrast = o["textureContrast"].toDouble(p.textureContrast);
-    p.textureInvert = o["textureInvert"].toBool(p.textureInvert);
-    p.textureMode = enumFrom(o["textureMode"], kTexMode, TextureMode::Multiply);
-    p.blend = blendModeFromId(o["blend"].toString("normal").toStdString());
     p.smoothing = o["smoothing"].toDouble(p.smoothing);
+    if (o.contains("sizeCurve")) p.sizeCurve = curveFromJson(o["sizeCurve"]);
+    if (o.contains("art")) p.art = std::make_shared<const ShapeGraph>(shapeGraphFromJson(o["art"].toObject()));
+    p.colorize = o["colorize"].toBool(true);
+    p.patternGap = o["patternGap"].toDouble(0.0);
+    p.stretchToFit = o["stretchToFit"].toBool(true);
+    p.roughness = o["roughness"].toDouble(p.roughness);
+    p.roughScale = o["roughScale"].toDouble(p.roughScale);
+    p.grain = o["grain"].toDouble(p.grain);
+    p.grainSize = o["grainSize"].toDouble(p.grainSize);
+    p.dabSize = o["dabSize"].toDouble(p.dabSize);
+    p.density = o["density"].toDouble(p.density);
+    p.scatter = o["scatter"].toDouble(p.scatter);
     return p;
 }
 
@@ -810,10 +732,11 @@ QByteArray serializeDocument(const Document& doc, bool pretty)
     for (const Symbol& s : doc.symbols) symbols.append(symbolToJson(s));
     root["scenes"] = scenes;
     root["symbols"] = symbols;
-    QJsonObject images;
-    for (const auto& [id, img] : doc.images)
-        if (img) images[QString::fromStdString(id)] = imageToJson(*img);
-    root["images"] = images;
+    if (!doc.brushes.empty()) {
+        QJsonArray brushes;
+        for (const VectorBrushPreset& b : doc.brushes) brushes.append(vectorBrushToJson(b));
+        root["brushes"] = brushes;
+    }
     return QJsonDocument(root).toJson(pretty ? QJsonDocument::Indented : QJsonDocument::Compact);
 }
 
@@ -843,9 +766,7 @@ bool deserializeDocument(const QByteArray& data, Document& doc, QString* error)
     const SymbolTypeScope typeScope(root["symbols"].toArray());
     for (const QJsonValue& v : root["scenes"].toArray()) d.scenes.push_back(timelineFromJson(v.toObject()));
     for (const QJsonValue& v : root["symbols"].toArray()) d.symbols.push_back(symbolFromJson(v.toObject()));
-    const QJsonObject images = root["images"].toObject();
-    for (auto it = images.begin(); it != images.end(); ++it)
-        if (GrayImagePtr img = imageFromJson(it.value().toObject())) d.images[it.key().toStdString()] = img;
+    for (const QJsonValue& v : root["brushes"].toArray()) d.brushes.push_back(vectorBrushFromJson(v.toObject()));
     // Keep id counters ahead of anything in the file.
     uint32_t maxLayer = 0;
     auto scan = [&](const Timeline& t) {

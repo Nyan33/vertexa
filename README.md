@@ -13,7 +13,8 @@ Written in C++20 with Qt 6.
 
 > **Status: first iteration (0.1).** The foundations are in place and covered by
 > tests: exact vector kernel, Flash-style shapes, timeline, symbols, tweens,
-> blend modes, tablets and texture brushes. Expect rough edges.
+> blend modes, filters, tablets, vector brushes and FLA import. Expect rough
+> edges.
 
 ## Highlights
 
@@ -52,7 +53,9 @@ created; their Up/Over/Down/Hit states are next on the roadmap), `F8` Convert to
 Symbol with a registration grid, edit in place (double-click, breadcrumbs),
 Break Apart (`Ctrl+B`), groups, swap symbol, instance names, colour effects
 (Brightness, Tint, Alpha, Advanced), graphic looping (Loop, Play Once, Single
-Frame, reverse modes, first/last frame).
+Frame, reverse modes, first/last frame). As in Animate, each instance has its
+own behaviour, so a movie clip can be placed as a graphic and the other way
+round.
 
 **Animation.**
 - **Classic tweens** with Animate's matrix decomposition, rotation (Auto, CW,
@@ -66,18 +69,44 @@ Darken, Multiply, Lighten, Screen, Overlay, Hard Light, Add, Subtract,
 Difference, Invert, Alpha, Erase) plus 13 more from Krita, also usable per
 layer with opacity.
 
+**Filters.** Animate's filter stack on movie clips and buttons: Drop Shadow,
+Blur, Glow, Bevel, Gradient Glow, Gradient Bevel and Adjust Color, with blur X/Y
+(linked or not), strength, quality (Low / Medium / High box-blur passes), angle,
+distance, knockout, inner and hide object. Filters animate in classic tweens and
+export to SVG.
+
 **Tablets.** Pressure, tilt, barrel rotation and the eraser tip through Qt's
 tablet API (Wacom, Huion, XP-Pen, Windows Ink / WinTab, macOS, X11/Wayland);
 uncompressed events, an editable pressure curve and a live test pad.
 
-**Texture brushes like Krita.** The **Paint Brush (Y)** uses a dab engine with
-auto or image tips (import GIMP/Krita `.gbr` and `.png`), spacing, flow/opacity
-"wash" build-up, sensor curves for size/opacity/flow, tilt and direction
-rotation, jitter, scatter and a canvas-anchored texture (multiply / subtract /
-height). Strokes stay resolution-independent data and re-render at any zoom.
+**Vector brushes.** The **Paint Brush (Y)** paints texture without ever
+leaving vectors: every stroke becomes ordinary fills that can be selected,
+erased, recoloured and shape-tweened.
+- **Art brushes** stretch a vector artwork along the stroke (ink taper, dry
+  brush), **pattern brushes** repeat a tile bent to the path (rope, dashes,
+  vine), as Animate's Art and Pattern brushes.
+- **Textured brushes** (chalk, charcoal, pencil) give the swept area a rough
+  edge and punch grain holes from a noise field anchored to the canvas, so
+  overlapping strokes line up.
+- **Scatter brushes** (spray, stipple) spray vector dabs along the path.
+- Pressure → size curves, smoothing, the five paint modes, object drawing and
+  an *erase with this brush* option. **Art Brush / Pattern Brush from
+  Selection** turns any artwork (lines included) into a brush saved in the
+  document; user presets are kept across documents.
 
 **Files.** Lossless `.vtx` (JSON) documents, PNG sequence, SVG frame and
 video export (through FFmpeg when installed).
+
+**FLA import (`Ctrl+R`).** Opens Adobe Flash / Animate documents:
+- binary `.fla` from Flash 5 to CS4, read straight from the OLE2 container and
+  the MFC object streams ([what is decoded and how](docs/FLA_FORMAT.md));
+- XFL — the zipped `.fla` of CS5 and later, a `.xfl` folder or `DOMDocument.xml`.
+
+Scenes, layers (folders, guides, masks), keyframes, labels, classic tweens with
+eases, shapes with solid and gradient fills and strokes, symbols with their
+libraries, instance behaviour, loops, colour effects, filters and blend modes
+come across. A report lists anything that could not be imported exactly
+(bitmaps, text, sounds and binary shape tweens for now).
 
 <p align="center">
   <img src="docs/images/instance.png" width="49%"/> <img src="docs/images/edit.png" width="49%"/>
@@ -106,7 +135,7 @@ On macOS pass `-DCMAKE_PREFIX_PATH="$(brew --prefix qt)"` to the first `cmake`
 call; on Windows point `CMAKE_PREFIX_PATH` at the Qt kit (e.g. `C:\Qt\6.8.0\msvc2022_64`).
 
 Useful options: `vertexa file.vtx` opens a document, `--demo` opens the demo
-scene, `--screenshot out.png [--frame N] [--state instance|edit|brushes|light]`
+scene, `--screenshot out.png [--frame N] [--state instance|edit|brushes|light|library|filters]`
 renders the UI to an image (handy for CI and docs).
 
 ## Project layout
@@ -115,8 +144,9 @@ renders the UI to an image (handy for CI and docs).
 src/geom    exact geometry kernel (pure C++, no Qt): Bezier math, intersections,
             planar arrangement, booleans, curve fitting, brush outlines, stabiliser
 src/core    document model: Flash-style shape graph and its operations, elements,
-            timelines, symbols, tweens, easing, texture brush presets, .vtx format
-src/render  scanline rasteriser, blend modes, dab engine, renderer, SVG export
+            timelines, symbols, tweens, easing, filters, vector brushes, .vtx format
+src/core/io FLA (OLE2 + MFC archives) and XFL (ZIP + XML) import
+src/render  scanline rasteriser, blend modes, filters, renderer, SVG export
 src/app     Qt Widgets application: stage, tools, timeline and panels
 tests       unit tests for every layer plus UI tests driving the real stage
 ```

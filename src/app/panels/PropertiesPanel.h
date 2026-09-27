@@ -38,6 +38,8 @@ private:
     QWidget* m_content = nullptr;
     QVBoxLayout* m_layout = nullptr;
     bool m_pending = false;
+    std::string m_shownBrush; ///< paint brush preset shown in the tool options
+    double m_shownSize = 0.0;
 };
 
 } // namespace vx::app

@@ -7,7 +7,6 @@
 #pragma once
 
 #include "BlendMode.h"
-#include "BrushPreset.h"
 #include "Color.h"
 #include "Filter.h"
 #include "ShapeGraph.h"
@@ -18,7 +17,7 @@
 
 namespace vx {
 
-enum class ElementType { Shape, Instance, Group, Paint, Morph };
+enum class ElementType { Shape, Instance, Group, Morph };
 
 class Element;
 using ElementPtr = std::shared_ptr<const Element>;
@@ -86,32 +85,6 @@ public:
     std::shared_ptr<Element> clone() const override { return std::make_shared<GroupElement>(*this); }
 };
 
-struct PaintSample {
-    Vec2 pos;
-    float pressure = 1.0f;
-    float tiltX = 0.0f, tiltY = 0.0f; ///< degrees
-    float rotation = 0.0f;            ///< degrees
-};
-
-struct PaintStroke {
-    std::vector<PaintSample> samples;
-    BrushPresetPtr brush;
-    Color color;
-    uint32_t seed = 1;
-    bool erase = false; ///< erases previous strokes of the same paint element
-};
-
-/// Texture brush painting: a list of dab-rendered strokes composited in their
-/// own buffer (so erase strokes only affect this element).
-class PaintElement final : public Element {
-public:
-    std::vector<PaintStroke> strokes;
-
-    ElementType type() const override { return ElementType::Paint; }
-    std::shared_ptr<Element> clone() const override { return std::make_shared<PaintElement>(*this); }
-    Rect localBounds() const;
-};
-
 /// Render-only element produced by shape tweens.
 class MorphElement final : public Element {
 public:
@@ -133,11 +106,6 @@ inline const GroupElement* asGroup(const ElementPtr& e)
 {
     return e && e->type() == ElementType::Group ? static_cast<const GroupElement*>(e.get()) : nullptr;
 }
-inline const PaintElement* asPaint(const ElementPtr& e)
-{
-    return e && e->type() == ElementType::Paint ? static_cast<const PaintElement*>(e.get()) : nullptr;
-}
-
 std::shared_ptr<ShapeElement> makeShapeElement(ShapeGraph g, bool isObject, const Affine& m = {});
 
 } // namespace vx

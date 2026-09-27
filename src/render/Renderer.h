@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Vertexa — document renderer: timelines, layers (masks, guides, outline
 // mode, layer blending), symbol instances (colour effects, blend modes,
-// graphic symbol sync), shapes, morphs and texture paint.
+// graphic symbol sync), shapes and morphs.
 #pragma once
 
 #include "core/Evaluate.h"
@@ -50,8 +50,6 @@ public:
     static QImage renderFrame(const Document& doc, const Timeline& tl, int frame, double scale, bool transparent,
                               RenderOptions opts = {});
 
-    /// Drop cached rasterisations (texture paint).
-    static void clearCache();
 
 private:
     struct Ctx {
@@ -68,7 +66,6 @@ private:
     void renderLayerItems(QImage& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c);
     void renderList(QImage& target, const std::vector<EvalItem>& items, const Ctx& c);
     void renderElement(QImage& target, const EvalItem& item, const Ctx& c, bool onPath = false);
-    void renderPaint(QImage& target, const ElementPtr& owner, const Ctx& c);
     bool layerHidden(const Timeline& tl, int index) const;
 
     const Document& m_doc;
