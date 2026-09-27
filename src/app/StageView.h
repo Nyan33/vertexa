@@ -40,8 +40,10 @@ public:
     double unitsPerPixel() const;
 
     Tool* activeTool() const { return m_active; }
+    /// True while a tool still computes finished work in the background
+    /// (e.g. paint brush strokes being merged).
+    bool hasPendingWork() const;
     Tool* toolFor(ToolId id) const;
-    void showToast(const QString& text);
     void invalidate();
     void refreshCursor();
     /// Colour of the rendered stage under a widget position.
@@ -73,7 +75,6 @@ protected:
 private:
     void renderCache();
     void drawSelection(QPainter& p);
-    void drawToast(QPainter& p);
     void activateTool(ToolId id);
     ToolEvent makeEvent(QPointF widgetPos, Qt::KeyboardModifiers mods) const;
     Tool* strokeTool() const { return m_strokeTool ? m_strokeTool : m_active; }
@@ -94,9 +95,6 @@ private:
     bool m_tabletActive = false;
     bool m_tabletDown = false;
     QElapsedTimer m_clock;
-    QString m_toast;
-    double m_toastT = 0.0;
-    QVariantAnimation* m_toastAnim = nullptr;
     QVariantAnimation* m_zoomAnim = nullptr;
     QPointF m_zoomAnchor;
     QPointF m_lastWidget;

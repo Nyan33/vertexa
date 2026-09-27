@@ -360,7 +360,7 @@ std::vector<BrushPiece> texturedStroke(const VectorBrushPreset& p, const std::ve
 {
     Region base = sweptRegion(path, BrushTip{});
     if (base.isEmpty()) return {};
-    if (p.roughness <= 0) base = refitRegion(base, tol, 0.9);
+    if (p.roughness <= 0) base = normalizeRegion(refitRegion(base, tol, 0.9)); // refitting may nick neighbours
     const double rmean = f.valid() ? f.rmean : (path.empty() ? 1.0 : path.front().r);
     if (p.roughness > 0 && rmean > 0) {
         Region rough;
@@ -504,8 +504,8 @@ std::vector<VectorBrushPreset> makeBuiltins()
         p.minSize = 0.5;
         p.roughness = 0.22;
         p.roughScale = 5;
-        p.grain = 0.55;
-        p.grainSize = 1.3;
+        p.grain = 0.4;
+        p.grainSize = 1.7;
         add(p);
     }
     {
@@ -530,8 +530,8 @@ std::vector<VectorBrushPreset> makeBuiltins()
         p.minSize = 0.4;
         p.roughness = 0.25;
         p.roughScale = 3;
-        p.grain = 0.45;
-        p.grainSize = 0.7;
+        p.grain = 0.4;
+        p.grainSize = 0.9;
         p.smoothing = 20;
         add(p);
     }
@@ -630,7 +630,7 @@ ShapeGraph vectorBrushGraph(const std::vector<BrushPiece>& pieces)
     ShapeGraph g;
     for (const BrushPiece& piece : pieces) {
         if (piece.region.isEmpty()) continue;
-        ShapeGraph pg = graphFromRegion(piece.region, piece.fill);
+        ShapeGraph pg = graphFromCleanRegion(piece.region, piece.fill);
         g = g.isEmpty() ? pg : overlay(g, pg);
     }
     return g;

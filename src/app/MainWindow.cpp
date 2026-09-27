@@ -246,7 +246,11 @@ void MainWindow::createActions()
     add("lastFrame", tr("Go to Last Frame"), QKeySequence("Shift+."), [ed] { ed->setFrame(ed->timeline().frameCount() - 1); }, "last");
     add("prevFrame", tr("Previous Frame"), QKeySequence(Qt::Key_Comma), [ed] { ed->setFrame(ed->frame() - 1); }, "prev");
     add("nextFrame", tr("Next Frame"), QKeySequence(Qt::Key_Period), [ed] { ed->setFrame(ed->frame() + 1); }, "next");
-    addCheck("loop", tr("Loop Playback"), {}, true, [ed](bool b) { ed->setLoopPlayback(b); });
+    addCheck("loop", tr("Loop Playback"), QKeySequence("Alt+Shift+L"), ed->loopPlayback(), [ed](bool b) { ed->setLoopPlayback(b); });
+    connect(ed, &Editor::loopChanged, this, [this]() {
+        const QSignalBlocker block(m_actions["loop"]);
+        m_actions["loop"]->setChecked(m_ed->loopPlayback());
+    });
     addCheck("simpleButtons", tr("Enable Simple &Buttons"), QKeySequence("Ctrl+Alt+B"), false, [ed](bool b) { ed->setSimpleButtons(b); });
 
     // Tools
@@ -587,7 +591,7 @@ bool MainWindow::importFlaFile(const QString& path)
                                 .arg(report.symbols)
                                 .arg(report.layers)
                                 .arg(report.keyframes);
-    m_stage->showToast(tr("Imported %1").arg(QFileInfo(path).fileName()));
+    m_ed->notify(tr("Imported %1").arg(QFileInfo(path).fileName()));
     statusBar()->showMessage(summary, 8000);
     if (!report.warnings.isEmpty()) {
         QStringList unique;

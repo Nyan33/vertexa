@@ -322,6 +322,11 @@ void Editor::setPlaying(bool play)
     if (play == m_playing) return;
     m_playing = play;
     if (play) {
+        // Start inside the loop, or from the beginning when parked on the end.
+        const int count = timeline().frameCount();
+        if (m_loop && (m_frame < loopStart() || m_frame > loopEnd())) m_frame = loopStart();
+        else if (!m_loop && m_frame >= count - 1) m_frame = 0;
+        emit frameChanged(m_frame);
         m_selection.clear();
         m_shapePick = {};
         emit selectionChanged();
@@ -332,7 +337,41 @@ void Editor::setPlaying(bool play)
     emit playingChanged(play);
 }
 
-void Editor::setLoopPlayback(bool on) { m_loop = on; }
+void Editor::setLoopPlayback(bool on)
+{
+    if (on && m_frameSel.valid() && m_frameSel.frameTo > m_frameSel.frameFrom) {
+        m_loopStart = m_frameSel.frameFrom;
+        m_loopEnd = m_frameSel.frameTo;
+    }
+    if (on == m_loop && !on) return;
+    m_loop = on;
+    emit loopChanged();
+}
+
+int Editor::loopStart() const
+{
+    const int last = std::max(0, timeline().frameCount() - 1);
+    return std::clamp(m_loopStart, 0, last);
+}
+
+int Editor::loopEnd() const
+{
+    const int last = std::max(0, timeline().frameCount() - 1);
+    const int end = m_loopEnd < 0 ? last : std::min(m_loopEnd, last);
+    return std::max(end, loopStart());
+}
+
+void Editor::setLoopRange(int from, int to)
+{
+    if (from > to) std::swap(from, to);
+    from = std::max(0, from);
+    const int last = std::max(0, timeline().frameCount() - 1);
+    to = to >= last ? -1 : to; // reaching the end follows the timeline as it grows
+    if (from == m_loopStart && to == m_loopEnd) return;
+    m_loopStart = from;
+    m_loopEnd = to;
+    emit loopChanged();
+}
 
 void Editor::setOnion(bool on, bool outline)
 {
@@ -352,12 +391,11 @@ void Editor::tick()
 {
     const int count = timeline().frameCount();
     int next = m_frame + 1;
-    if (next >= count) {
-        if (!m_loop) {
-            setPlaying(false);
-            return;
-        }
-        next = 0;
+    if (m_loop) {
+        if (next > loopEnd() || next < loopStart()) next = loopStart();
+    } else if (next >= count) {
+        setPlaying(false);
+        return;
     }
     m_frame = next;
     emit frameChanged(m_frame);

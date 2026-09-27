@@ -18,6 +18,11 @@ enum class EraseMode { Normal, Fills, Lines, SelectedFills, Inside };
 
 // --- construction --------------------------------------------------------
 ShapeGraph graphFromRegion(const Region& r, const FillStyle& fill);
+/// Same as graphFromRegion for a clean region: no overlaps or crossings, the
+/// fill on the same side of every contour (the output of normalizeRegion or
+/// booleanOp, optionally with separate holes added). Much faster: no
+/// arrangement is built.
+ShapeGraph graphFromCleanRegion(const Region& r, const FillStyle& fill);
 /// Open or closed chains of curves painted with a stroke style.
 ShapeGraph graphFromPaths(const std::vector<std::vector<Cubic>>& chains, const StrokeStyle& stroke);
 /// A closed shape (rectangle, oval, polystar...) with optional fill and stroke.
@@ -31,11 +36,15 @@ struct OverlayOptions {
     const Region* mask = nullptr;
     /// Inside mode started in an empty area: only paint empty space.
     bool insideEmpty = false;
+    /// Only run the parts of `base` that reach `top` through the arrangement
+    /// (same result, much faster on detailed layers; off for testing).
+    bool localized = true;
 };
 /// Paint `top` over `base` (merge drawing).
 ShapeGraph overlay(const ShapeGraph& base, const ShapeGraph& top, const OverlayOptions& opt = {});
 /// Erase the area of `eraser` from `base`. `mask` restricts SelectedFills/Inside.
-ShapeGraph erase(const ShapeGraph& base, const Region& eraser, EraseMode mode, const Region* mask = nullptr);
+ShapeGraph erase(const ShapeGraph& base, const Region& eraser, EraseMode mode, const Region* mask = nullptr,
+                 bool localized = true);
 
 // --- fills -----------------------------------------------------------------
 /// Paint bucket. `gap` closes gaps up to that size (document units).

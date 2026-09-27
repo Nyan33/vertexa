@@ -8,8 +8,10 @@
 #include "geom/Fit.h"
 #include "render/QtConvert.h"
 
+#include <QCoreApplication>
 #include <QPainter>
 #include <QRandomGenerator>
+#include <QThreadPool>
 
 #include <algorithm>
 
@@ -562,15 +564,70 @@ QCursor PencilTool::cursor() const { return Qt::CrossCursor; }
 
 // --- PaintBrushTool -------------------------------------------------------------------------
 //
-// Every brush produces vector fills. While drawing, the exact vector stroke is
-// rebuilt as often as its cost allows; samples that arrived since the last
-// rebuild are shown as a quick round outline.
+// Every brush produces vector fills. While drawing, textured brushes are
+// previewed chunk by chunk into an image (their texture is anchored to the
+// canvas, so the chunks line up); other brushes rebuild their exact stroke as
+// often as its cost allows. Samples newer than the preview are shown as a
+// quick round outline. On release the exact stroke is built and merged into
+// the layer on a worker thread, and committed on the GUI thread in order;
+// the preview stays up until then.
+
+struct PaintBrushTool::Job {
+    VectorBrushPreset preset;
+    std::vector<BrushPoint> path;
+    FillStyle paint;
+    uint32_t seed = 1;
+    double tolerance = 0.1;
+    bool erase = false;
+    bool object = false;
+    PaintMode mode = PaintMode::Normal;
+    std::optional<Region> mask;
+    bool insideEmpty = false;
+    uint32_t layerId = 0;
+    ShapeGraphPtr base; ///< merge shape the result was computed on
+    // Results, written by the worker.
+    ShapeGraph stroke;
+    std::optional<ShapeGraph> merged;
+    Region area; ///< erase: the stroke's area
+
+    OverlayOptions options() const
+    {
+        OverlayOptions opt;
+        opt.mode = mode;
+        if (mask) opt.mask = &*mask;
+        opt.insideEmpty = insideEmpty;
+        return opt;
+    }
+
+    void run()
+    {
+        std::vector<BrushPiece> pieces = vectorBrushStroke(preset, path, paint, seed, tolerance);
+        if (pieces.empty()) return;
+        if (erase) {
+            Region all;
+            for (BrushPiece& piece : pieces)
+                for (Contour& c : piece.region.contours) all.contours.push_back(std::move(c));
+            area = normalizeRegion(all);
+            return;
+        }
+        Rect bounds;
+        for (const BrushPiece& piece : pieces) bounds.include(piece.region.bounds());
+        for (BrushPiece& piece : pieces)
+            if (piece.fill == paint) piece.fill = fitGradient(piece.fill, bounds);
+        stroke = vectorBrushGraph(pieces);
+        if (!object && !stroke.isEmpty()) merged = overlay(base ? *base : ShapeGraph{}, stroke, options());
+    }
+};
+
+PaintBrushTool::~PaintBrushTool() { *m_alive = false; }
 
 FillStyle PaintBrushTool::paintStyle() const
 {
     // Like Animate's Paint Brush, the stroke colour paints.
     return ed->settings().stroke.paint;
 }
+
+Affine PaintBrushTool::overlayTransform() const { return Affine::scale(view->devicePixelRatioF()) * view->timelineToWidget(); }
 
 void PaintBrushTool::press(const ToolEvent& e)
 {
@@ -587,14 +644,25 @@ void PaintBrushTool::press(const ToolEvent& e)
         m_insideEmpty = false;
     }
     m_preset = s.paint;
+    m_chunked = m_preset.kind == VectorBrushKind::Textured;
     m_seed = QRandomGenerator::global()->generate() | 1u;
     m_pieces.clear();
     m_covered = 0;
     m_buildCost = 0;
     m_clock.start();
     m_lastBuild = -1000;
+    // The overlay may still show strokes waiting to be merged: keep it when
+    // the view has not moved.
+    const QSize px = view->size() * view->devicePixelRatioF();
+    if (m_overlay.size() != px || !(overlayTransform() == m_overlayXf) || m_jobs.empty()) {
+        m_overlay = QImage(px, QImage::Format_ARGB32_Premultiplied);
+        m_overlay.setDevicePixelRatio(view->devicePixelRatioF());
+        m_overlay.fill(0);
+        m_overlayXf = overlayTransform();
+    }
     beginStroke(e, m_preset.smoothing);
-    rebuildPreview();
+    if (m_chunked) extendTexturePreview(true);
+    else rebuildPreview();
     update();
 }
 
@@ -617,6 +685,45 @@ void PaintBrushTool::rebuildPreview()
     m_tail = QPainterPath();
 }
 
+void PaintBrushTool::extendTexturePreview(bool force)
+{
+    const size_t n = m_points.size();
+    if (n == 0 || n <= m_covered) return;
+    double fresh = 0.0;
+    for (size_t i = std::max<size_t>(m_covered, 1); i < n; ++i) fresh += distance(m_points[i - 1].pos, m_points[i].pos);
+    const double chunk = std::max(m_preset.size * 2.0, 24.0 * unitsPerPixel());
+    if (!force && fresh < chunk && m_clock.elapsed() - m_lastBuild < 80) {
+        rebuildTail();
+        return;
+    }
+    // Start about one brush width back so neighbouring chunks overlap.
+    size_t from = m_covered;
+    double back = 0.0;
+    while (from > 0 && back < m_preset.size) {
+        back += distance(m_points[from - 1].pos, m_points[from].pos);
+        --from;
+    }
+    const std::vector<InputSample> part(m_points.begin() + long(from), m_points.end());
+    QColor color = toQColor(paintStyle().mainColor());
+    if (ed->settings().paintErase) {
+        color = ui::Theme::p().text;
+        color.setAlpha(110);
+    }
+    QPainter p(&m_overlay);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setTransform(toQTransform(Affine::scale(1.0 / m_overlay.devicePixelRatio()) * m_overlayXf));
+    p.setPen(Qt::NoPen);
+    p.setBrush(color);
+    for (const BrushPiece& piece : vectorBrushStroke(m_preset, vectorBrushPath(m_preset, part), paintStyle(), m_seed, 0.3 * unitsPerPixel())) {
+        QPainterPath qp = toQPath(piece.region);
+        qp.setFillRule(Qt::WindingFill);
+        p.drawPath(qp);
+    }
+    m_covered = n;
+    m_lastBuild = m_clock.elapsed();
+    m_tail = QPainterPath();
+}
+
 void PaintBrushTool::rebuildTail()
 {
     m_tail = QPainterPath();
@@ -636,10 +743,14 @@ void PaintBrushTool::move(const ToolEvent& e)
         return;
     }
     if (!addSample(e).empty()) {
-        // Keep the exact preview to about a third of the time between events.
-        const qint64 now = m_clock.elapsed();
-        if (now - m_lastBuild >= std::max<qint64>(30, 2 * m_buildCost)) rebuildPreview();
-        else rebuildTail();
+        if (m_chunked) {
+            extendTexturePreview(false);
+        } else {
+            // Keep the exact preview to about a third of the time between events.
+            const qint64 now = m_clock.elapsed();
+            if (now - m_lastBuild >= std::max<qint64>(30, 2 * m_buildCost)) rebuildPreview();
+            else rebuildTail();
+        }
     }
     update();
 }
@@ -649,32 +760,99 @@ void PaintBrushTool::release(const ToolEvent&)
     if (!m_active) return;
     const ToolSettings& s = ed->settings();
     const std::vector<InputSample> pts = endStroke(m_preset.smoothing);
+    // Keep what the user sees until the merged result arrives.
+    if (!m_overlay.isNull() && (!m_pieces.empty() || !m_tail.isEmpty())) {
+        QPainter p(&m_overlay);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setTransform(toQTransform(Affine::scale(1.0 / m_overlay.devicePixelRatio()) * m_overlayXf));
+        p.setPen(Qt::NoPen);
+        for (const PreviewPiece& piece : m_pieces) {
+            p.setBrush(piece.color);
+            p.drawPath(piece.path);
+        }
+        if (!m_tail.isEmpty()) {
+            p.setBrush(m_pieces.empty() ? toQColor(paintStyle().mainColor()) : m_pieces.back().color);
+            p.drawPath(m_tail);
+        }
+    }
     m_pieces.clear();
     m_tail = QPainterPath();
-    update();
-    if (pts.empty()) return;
-    const double upp = unitsPerPixel();
-    const std::vector<BrushPoint> path = vectorBrushPath(m_preset, pts);
-    const FillStyle paint = paintStyle();
-    std::vector<BrushPiece> pieces = vectorBrushStroke(m_preset, path, paint, m_seed, 0.08 * upp);
-    if (pieces.empty()) return;
-    if (s.paintErase) {
-        Region area;
-        for (BrushPiece& piece : pieces)
-            for (Contour& c : piece.region.contours) area.contours.push_back(std::move(c));
-        eraseArea(ed, m_layer, normalizeRegion(area), EraseMode::Normal, nullptr, QObject::tr("Paint Brush Erase"));
+    const Layer* layer = m_layer >= 0 && m_layer < int(ed->timeline().layers.size()) ? &ed->timeline().layers[m_layer] : nullptr;
+    if (pts.empty() || !layer) {
+        update();
         return;
     }
-    Rect bounds;
-    for (const BrushPiece& piece : pieces) bounds.include(piece.region.bounds());
-    for (BrushPiece& piece : pieces)
-        if (piece.fill == paint) piece.fill = fitGradient(piece.fill, bounds);
-    const ShapeGraph g = vectorBrushGraph(pieces);
-    OverlayOptions opt;
-    opt.mode = s.paintMode;
-    if (m_insideMask) opt.mask = &*m_insideMask;
-    opt.insideEmpty = m_insideEmpty;
-    commitShape(ed, m_layer, g, QObject::tr("Paint Brush"), opt);
+    auto job = std::make_shared<Job>();
+    job->preset = m_preset;
+    job->path = vectorBrushPath(m_preset, pts);
+    job->paint = paintStyle();
+    job->seed = m_seed;
+    job->tolerance = 0.08 * unitsPerPixel();
+    job->erase = s.paintErase;
+    job->object = s.objectDrawing;
+    job->mode = s.paintMode;
+    job->mask = m_insideMask;
+    job->insideEmpty = m_insideEmpty;
+    job->layerId = layer->id;
+    m_jobs.push_back(job);
+    startNextJob();
+    update();
+}
+
+void PaintBrushTool::startNextJob()
+{
+    if (m_running || m_jobs.empty()) return;
+    std::shared_ptr<Job> job = m_jobs.front();
+    const int li = ed->timeline().layerIndex(job->layerId);
+    job->base = (job->erase || job->object || li < 0) ? nullptr : ed->mergeShape(li);
+    // Lazily built caches of shared artwork are filled here, not on the worker.
+    if (job->preset.art) (void)job->preset.art->topology();
+    m_running = true;
+    std::weak_ptr<bool> alive = m_alive;
+    QThreadPool::globalInstance()->start([this, job, alive]() {
+        job->run();
+        if (QCoreApplication* app = QCoreApplication::instance())
+            QMetaObject::invokeMethod(app, [this, alive]() {
+                if (const auto a = alive.lock(); a && *a) finishJob();
+            }, Qt::QueuedConnection);
+    });
+}
+
+void PaintBrushTool::finishJob()
+{
+    m_running = false;
+    if (m_jobs.empty()) return;
+    const std::shared_ptr<Job> job = m_jobs.front();
+    m_jobs.pop_front();
+    const int li = ed->timeline().layerIndex(job->layerId);
+    if (li >= 0) {
+        if (job->erase) {
+            if (!job->area.isEmpty()) eraseArea(ed, li, job->area, EraseMode::Normal, nullptr, QObject::tr("Paint Brush Erase"));
+        } else if (!job->stroke.isEmpty()) {
+            ed->edit(QObject::tr("Paint Brush"), [&](Document& d) {
+                QString why;
+                Keyframe* k = ed->editableKey(d, li, &why);
+                if (!k) {
+                    ed->notify(why);
+                    return false;
+                }
+                if (job->object) {
+                    k->elements.push_back(makeShapeElement(job->stroke, true));
+                    return true;
+                }
+                const ShapeElement* cur = k->elements.empty() ? nullptr : asShape(k->elements.front());
+                const ShapeGraphPtr current = cur && !cur->isObject ? cur->graph : nullptr;
+                // Merged on the worker against the shape that is still there; if the
+                // layer changed meanwhile, merge again.
+                if (job->merged && current == job->base) setKeyframeMergeShape(*k, std::move(*job->merged));
+                else mergeIntoKeyframe(*k, job->stroke, job->options());
+                return true;
+            });
+        }
+    }
+    if (m_jobs.empty() && !m_active) m_overlay = QImage();
+    update();
+    startNextJob();
 }
 
 void PaintBrushTool::hover(const ToolEvent& e)
@@ -686,6 +864,8 @@ void PaintBrushTool::hover(const ToolEvent& e)
 
 void PaintBrushTool::paint(QPainter& p)
 {
+    if (!m_overlay.isNull() && (m_active || !m_jobs.empty()) && overlayTransform() == m_overlayXf)
+        p.drawImage(QPointF(0, 0), m_overlay);
     if (m_active && (!m_pieces.empty() || !m_tail.isEmpty())) {
         p.save();
         p.setRenderHint(QPainter::Antialiasing);
@@ -697,7 +877,11 @@ void PaintBrushTool::paint(QPainter& p)
         }
         if (!m_tail.isEmpty()) {
             QColor c = m_pieces.empty() ? toQColor(paintStyle().mainColor()) : m_pieces.back().color;
-            c.setAlphaF(c.alphaF() * 0.55);
+            if (!m_chunked) c.setAlphaF(c.alphaF() * 0.55);
+            if (ed->settings().paintErase) {
+                c = ui::Theme::p().text;
+                c.setAlpha(110);
+            }
             p.setBrush(c);
             p.drawPath(m_tail);
         }
@@ -714,6 +898,7 @@ void PaintBrushTool::cancel()
     FreehandTool::cancel();
     m_pieces.clear();
     m_tail = QPainterPath();
+    if (m_jobs.empty()) m_overlay = QImage();
 }
 
 QCursor PaintBrushTool::cursor() const { return Qt::BlankCursor; }

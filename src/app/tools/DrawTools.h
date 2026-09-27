@@ -9,7 +9,11 @@
 #include "geom/Smooth.h"
 
 #include <QElapsedTimer>
+#include <QImage>
 #include <QPainterPath>
+
+#include <deque>
+#include <memory>
 
 namespace vx::app {
 
@@ -91,6 +95,7 @@ private:
 class PaintBrushTool : public FreehandTool {
 public:
     using FreehandTool::FreehandTool;
+    ~PaintBrushTool() override;
     ToolId id() const override { return ToolId::PaintBrush; }
     void press(const ToolEvent& e) override;
     void move(const ToolEvent& e) override;
@@ -99,18 +104,30 @@ public:
     void paint(QPainter& p) override;
     void cancel() override;
     QCursor cursor() const override;
+    bool hasPendingWork() const override { return !m_jobs.empty(); }
 
 private:
     struct PreviewPiece {
         QPainterPath path; ///< timeline space
         QColor color;
     };
+    /// A finished stroke being turned into vector fills and merged on a
+    /// worker thread; committed on the GUI thread in order.
+    struct Job;
+
     void rebuildPreview();
+    void extendTexturePreview(bool force);
     void rebuildTail();
     FillStyle paintStyle() const;
+    Affine overlayTransform() const;
+    void startNextJob();
+    void finishJob();
 
     VectorBrushPreset m_preset;
-    std::vector<PreviewPiece> m_pieces; ///< exact vector preview
+    bool m_chunked = false;             ///< textured brushes preview in chunks
+    std::vector<PreviewPiece> m_pieces; ///< exact vector preview (whole stroke)
+    QImage m_overlay;                   ///< chunked preview and strokes waiting to be merged (device pixels)
+    Affine m_overlayXf;                 ///< timeline -> overlay pixels when it was drawn
     size_t m_covered = 0;               ///< samples the exact preview covers
     QPainterPath m_tail;                ///< quick outline of the newer samples
     QElapsedTimer m_clock;
@@ -119,6 +136,9 @@ private:
     bool m_insideEmpty = false;
     int m_layer = -1;
     uint32_t m_seed = 1;
+    std::deque<std::shared_ptr<Job>> m_jobs;
+    bool m_running = false;
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
 };
 
 /// Commits a finished shape (merge drawing or drawing object) on a layer.

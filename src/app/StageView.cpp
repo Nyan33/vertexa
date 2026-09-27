@@ -59,15 +59,6 @@ StageView::StageView(Editor* editor, QWidget* parent) : QWidget(parent), m_ed(ed
     m_tools[ToolId::Zoom] = std::make_unique<ZoomTool>(m_ed, this);
     m_active = m_tools[m_ed->tool()].get();
 
-    m_toastAnim = new QVariantAnimation(this);
-    m_toastAnim->setStartValue(0.0);
-    m_toastAnim->setEndValue(1.0);
-    m_toastAnim->setDuration(1300);
-    connect(m_toastAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
-        m_toastT = v.toDouble();
-        update();
-    });
-
     m_zoomAnim = new QVariantAnimation(this);
     m_zoomAnim->setDuration(170);
     m_zoomAnim->setEasingCurve(QEasingCurve::OutCubic);
@@ -120,7 +111,6 @@ void StageView::activateTool(ToolId id)
     m_active = next;
     m_active->activate();
     refreshCursor();
-    showToast(Editor::toolName(id).toUpper());
     update();
 }
 
@@ -172,13 +162,6 @@ void StageView::invalidate()
 {
     m_cacheValid = false;
     update();
-}
-
-void StageView::showToast(const QString& text)
-{
-    m_toast = text;
-    m_toastAnim->stop();
-    m_toastAnim->start();
 }
 
 void StageView::refreshCursor()
@@ -369,40 +352,6 @@ void StageView::drawSelection(QPainter& p)
     p.restore();
 }
 
-void StageView::drawToast(QPainter& p)
-{
-    if (m_toast.isEmpty() || m_toastT <= 0.0 || m_toastT >= 1.0) return;
-    const double t = m_toastT;
-    double a = 1.0;
-    if (t < 0.12) a = t / 0.12;
-    else if (t > 0.65) a = std::max(0.0, 1.0 - (t - 0.65) / 0.35);
-    const double slide = (1.0 - std::min(1.0, t / 0.18)) * 14.0;
-    const ui::Palette& pal = ui::Theme::p();
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing);
-    p.setRenderHint(QPainter::TextAntialiasing);
-    const QFont f = ui::Theme::display(40);
-    p.setFont(f);
-    const QFontMetrics fm(f);
-    const int w = fm.horizontalAdvance(m_toast);
-    const QPointF org(28, height() - 34 + slide);
-    QColor shadow = pal.bg0;
-    shadow.setAlphaF(float(0.55 * a));
-    p.setPen(shadow);
-    p.drawText(org + QPointF(0, 2), m_toast);
-    QColor c = pal.text;
-    c.setAlphaF(float(a));
-    p.setPen(c);
-    p.drawText(org, m_toast);
-    QColor acc = pal.accent;
-    acc.setAlphaF(float(a));
-    p.setPen(Qt::NoPen);
-    p.setBrush(acc);
-    const double grow = std::min(1.0, t / 0.3);
-    p.drawRoundedRect(QRectF(org.x(), org.y() + 8, w * grow, 5), 2.5, 2.5);
-    p.restore();
-}
-
 void StageView::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -435,7 +384,6 @@ void StageView::paintEvent(QPaintEvent*)
     drawSelection(p);
     if (m_active) m_active->paint(p);
     if (m_strokeTool && m_strokeTool != m_active) m_strokeTool->paint(p);
-    drawToast(p);
 }
 
 void StageView::resizeEvent(QResizeEvent*)
@@ -487,6 +435,13 @@ void StageView::mousePressEvent(QMouseEvent* ev)
         return;
     }
     if (Tool* t = strokeTool()) t->press(te);
+}
+
+bool StageView::hasPendingWork() const
+{
+    for (const auto& [id, tool] : m_tools)
+        if (tool->hasPendingWork()) return true;
+    return false;
 }
 
 const Symbol* StageView::sliceSymbol() const
