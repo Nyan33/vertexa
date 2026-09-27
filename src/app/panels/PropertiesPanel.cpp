@@ -187,6 +187,7 @@ void PropertiesPanel::rebuild()
     buildToolOptions();
     if (m_ed->hasSelection()) buildSelection();
     else {
+        if (m_ed->inSymbol()) buildSymbol();
         buildFrame();
         buildLayer();
         buildDocument();
@@ -530,7 +531,7 @@ void PropertiesPanel::buildSelection()
             Timeline& tl = m_ed->mutableTimeline(d);
             for (const ElementRef& r : m_ed->selection()) {
                 const int li = tl.layerIndex(r.layerId);
-                Keyframe* k = li >= 0 ? tl.layers[li].keyAt(m_ed->frame()) : nullptr;
+                Keyframe* k = m_ed->selectionKey(d, li);
                 if (!k || r.index >= int(k->elements.size())) continue;
                 if (const InstanceElement* x = asInstance(k->elements[r.index])) {
                     auto c = x->cloneAs<InstanceElement>();
@@ -867,6 +868,29 @@ void PropertiesPanel::buildLayer()
                 m_ed->setLayerProperty(li, [v](Layer& x) { x.opacity = v / 100.0; }, tr("Layer Opacity"));
             }));
     }
+}
+
+void PropertiesPanel::buildSymbol()
+{
+    const std::string id = m_ed->contextStack().back().symbolId;
+    const Symbol* s = m_ed->doc().symbol(id);
+    if (!s) return;
+    QGridLayout* g = section(QString::fromStdString(s->name), tr("symbol"));
+    row(g, tr("Type"), combo(m_content, {tr("Movie Clip"), tr("Graphic"), tr("Button")}, int(s->type),
+                             [this, id](int i) { m_ed->setSymbolType(id, SymbolType(i)); }));
+    row(g, {}, check(m_content, tr("9-slice scaling"), s->scale9.has_value(), [this, id](bool on) {
+            m_ed->setSymbolScale9(id, on ? m_ed->defaultScale9(id) : std::nullopt);
+        }));
+    auto* hint = new QLabel(m_content);
+    hint->setWordWrap(true);
+    hint->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text3.name()));
+    if (s->type == SymbolType::Button)
+        hint->setText(tr("Frames 1–4 are the Up, Over, Down and Hit states. Control ▸ Enable Simple Buttons "
+                         "(Ctrl+Alt+B) previews them on the stage."));
+    else if (s->scale9)
+        hint->setText(tr("Drag the dashed guides: corners keep their size when instances are scaled, the middle stretches."));
+    if (!hint->text().isEmpty()) row(g, {}, hint);
+    else delete hint;
 }
 
 void PropertiesPanel::buildDocument()

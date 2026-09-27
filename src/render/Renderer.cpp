@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Renderer.h"
+#include "core/ShapeTween.h"
 #include "Blend.h"
 #include "Filters.h"
 #include "QtConvert.h"
@@ -235,6 +236,12 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
     case ElementType::Shape: {
         const auto& s = static_cast<const ShapeElement&>(e);
         if (!s.graph) return;
+        if (c.slice) {
+            const ShapeRenderData rd = c.slice->apply(*s.graph, c.toSymbol * e.matrix).renderData();
+            if (c.outline) renderOutline(target, rd, c.sliceBase, c.outlineColor, c.clip);
+            else renderShape(target, rd, c.sliceBase, c.ct, c.clip);
+            return;
+        }
         if (c.outline) renderOutline(target, s.graph->renderData(), m, c.outlineColor, c.clip);
         else renderShape(target, s.graph->renderData(), m, c.ct, c.clip);
         return;
@@ -242,6 +249,12 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
     case ElementType::Morph: {
         const auto& mo = static_cast<const MorphElement&>(e);
         if (!mo.data) return;
+        if (c.slice) {
+            const ShapeRenderData rd = c.slice->apply(graphFromRenderData(*mo.data), c.toSymbol * e.matrix).renderData();
+            if (c.outline) renderOutline(target, rd, c.sliceBase, c.outlineColor, c.clip);
+            else renderShape(target, rd, c.sliceBase, c.ct, c.clip);
+            return;
+        }
         if (c.outline) renderOutline(target, *mo.data, m, c.outlineColor, c.clip);
         else renderShape(target, *mo.data, m, c.ct, c.clip);
         return;
@@ -250,7 +263,8 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
         const auto& g = static_cast<const GroupElement&>(e);
         Ctx gc = ec;
         gc.m = m;
-        for (const ElementPtr& ch : g.children) renderElement(target, {ch, item.localFrame}, gc, false);
+        gc.toSymbol = c.toSymbol * e.matrix;
+        for (const ElementPtr& ch : g.children) renderElement(target, {ch, item.localFrame, ch.get()}, gc, false);
         return;
     }
     case ElementType::Instance: {
@@ -258,11 +272,17 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
         if (!in.visible) return;
         const Symbol* sym = m_doc.symbol(in.symbolId);
         if (!sym || c.depth > 32) return;
-        const int frame = instanceSymbolFrame(m_doc, in, item.localFrame, m_opts.clipFrame);
+        const ButtonState state = item.source && item.source == m_opts.hotButton ? m_opts.hotState : ButtonState::Up;
+        const int frame = instanceSymbolFrame(m_doc, in, item.localFrame, m_opts.clipFrame, state);
         Ctx ic = ec;
         ic.m = m;
         ic.ct = c.ct * in.color.toTransform();
         ic.depth = c.depth + 1;
+        // 9-slice applies to this symbol's own shapes; nested symbols scale normally.
+        const std::optional<Slice9> slice = instanceSlice9(m_doc, in, frame);
+        ic.slice = slice ? &*slice : nullptr;
+        ic.sliceBase = m;
+        ic.toSymbol = {};
         const bool blends = in.blend != BlendMode::Normal && in.behavior != SymbolType::Graphic && !c.outline;
         const bool filtered = in.behavior != SymbolType::Graphic && !c.outline && hasActiveFilters(in.filters);
         if (!blends && !filtered) {
@@ -285,6 +305,7 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
             buf.fill(0);
             Ctx fc = ic;
             fc.m = Affine::translate(-area.x(), -area.y()) * m;
+            fc.sliceBase = fc.m;
             fc.ct = ColorTransform{};
             fc.isolated = true;
             fc.clip = buf.rect();

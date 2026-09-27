@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Vertexa — Library panel: symbols with a live preview, drag to stage.
+// Vertexa — Library panel: symbols in folders with a live preview, drag to
+// the stage or into folders.
 #pragma once
 
 #include "../Editor.h"
 
-#include <QListWidget>
+#include <QTreeWidget>
 #include <QWidget>
+
+#include <set>
 
 class QLabel;
 
@@ -13,14 +16,24 @@ namespace vx::app {
 
 class SectionTitle;
 
-class LibraryList : public QListWidget {
+/// Library tree: folders and symbols. Symbols drag to the stage or into
+/// folders.
+class LibraryTree : public QTreeWidget {
     Q_OBJECT
 public:
-    using QListWidget::QListWidget;
+    LibraryTree(Editor* editor, QWidget* parent = nullptr);
+    enum Kind { SymbolItem = 0, FolderItem = 1 };
+    static constexpr int KindRole = Qt::UserRole + 1;
 
 protected:
-    QMimeData* mimeData(const QList<QListWidgetItem*>& items) const override;
+    QMimeData* mimeData(const QList<QTreeWidgetItem*>& items) const override;
     QStringList mimeTypes() const override;
+    void startDrag(Qt::DropActions actions) override;
+    void dragMoveEvent(QDragMoveEvent* e) override;
+    void dropEvent(QDropEvent* e) override;
+
+private:
+    Editor* m_ed;
 };
 
 class SymbolPreview : public QWidget {
@@ -46,10 +59,15 @@ public:
 private:
     void refresh();
     std::string currentId() const;
+    /// Folder of the current item (the folder itself or the symbol's folder).
+    std::string currentFolder() const;
+    void newFolder(const std::string& parent);
+    void contextMenu(const QPoint& pos);
     Editor* m_ed;
     SectionTitle* m_title;
     SymbolPreview* m_preview;
-    LibraryList* m_list;
+    LibraryTree* m_tree;
+    std::set<std::string> m_collapsed; ///< folders the user closed
     bool m_refreshing = false;
 };
 

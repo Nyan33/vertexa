@@ -582,6 +582,7 @@ QJsonObject symbolToJson(const Symbol& s)
     o["name"] = QString::fromStdString(s.name);
     if (!s.folder.empty()) o["folder"] = QString::fromStdString(s.folder);
     o["type"] = enumName(s.type, kSymbolType);
+    if (s.scale9) o["scale9"] = QJsonArray{s.scale9->x0, s.scale9->y0, s.scale9->x1, s.scale9->y1};
     o["timeline"] = timelineToJson(s.timeline);
     return o;
 }
@@ -593,6 +594,8 @@ Symbol symbolFromJson(const QJsonObject& o)
     s.name = o["name"].toString().toStdString();
     s.folder = o["folder"].toString().toStdString();
     s.type = enumFrom(o["type"], kSymbolType, SymbolType::MovieClip);
+    if (const QJsonArray g = o["scale9"].toArray(); g.size() == 4)
+        s.scale9 = Rect(g[0].toDouble(), g[1].toDouble(), g[2].toDouble(), g[3].toDouble());
     s.timeline = timelineFromJson(o["timeline"].toObject());
     return s;
 }
@@ -737,6 +740,11 @@ QByteArray serializeDocument(const Document& doc, bool pretty)
         for (const VectorBrushPreset& b : doc.brushes) brushes.append(vectorBrushToJson(b));
         root["brushes"] = brushes;
     }
+    if (!doc.libraryFolders.empty()) {
+        QJsonArray folders;
+        for (const std::string& f : doc.libraryFolders) folders.append(QString::fromStdString(f));
+        root["folders"] = folders;
+    }
     return QJsonDocument(root).toJson(pretty ? QJsonDocument::Indented : QJsonDocument::Compact);
 }
 
@@ -767,6 +775,7 @@ bool deserializeDocument(const QByteArray& data, Document& doc, QString* error)
     for (const QJsonValue& v : root["scenes"].toArray()) d.scenes.push_back(timelineFromJson(v.toObject()));
     for (const QJsonValue& v : root["symbols"].toArray()) d.symbols.push_back(symbolFromJson(v.toObject()));
     for (const QJsonValue& v : root["brushes"].toArray()) d.brushes.push_back(vectorBrushFromJson(v.toObject()));
+    for (const QJsonValue& v : root["folders"].toArray()) d.libraryFolders.push_back(v.toString().toStdString());
     // Keep id counters ahead of anything in the file.
     uint32_t maxLayer = 0;
     auto scan = [&](const Timeline& t) {

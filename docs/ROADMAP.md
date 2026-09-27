@@ -17,13 +17,15 @@
 - [x] Filters on movie clips and buttons (all seven Animate filters)
 - [x] FLA import: binary Flash 5 – CS4 and XFL (CS5+, Animate)
 - [x] Per-instance behaviour (movie clip / graphic / button)
+- [x] Button symbols: Up / Over / Down / Hit, Enable Simple Buttons
+- [x] 9-slice scaling with exact curve splitting
+- [x] Library folders
 - [x] `.vtx` files, PNG sequence / SVG / video export
 
 ## Next
 
 - **Text tool** (static text with embedded outlines)
 - **Gradient Transform tool** and bitmap fills
-- **Button symbols**: Up / Over / Down / Hit frames and preview
 - **Snapping**: to objects, pixels and guides; rulers, grid and guides
 - **Align / Transform / Info panels**
 - **Camera layer** and **layer parenting**

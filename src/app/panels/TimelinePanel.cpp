@@ -135,12 +135,23 @@ void TimelineView::paintRuler(QPainter& p)
     p.setClipRect(QRect(m_layersW, 0, width() - m_layersW, m_rulerH));
     p.fillRect(QRect(m_layersW, 0, width(), m_rulerH), pal.bg1);
     const int first = frameAt(m_layersW), last = frameAt(width()) + 1;
+    // A button symbol's first four frames are its states, as in Animate.
+    const Symbol* sym = m_ed->inSymbol() ? m_ed->doc().symbol(m_ed->contextStack().back().symbolId) : nullptr;
+    const bool button = sym && sym->type == SymbolType::Button;
+    const QString states[4] = {tr("Up"), tr("Over"), tr("Down"), tr("Hit")};
     p.setFont(Theme::ui(10, QFont::DemiBold));
     for (int f = first; f <= last; ++f) {
         const double x = frameX(f);
         const bool major = (f + 1) % 5 == 0 || f == 0;
         p.setPen(QPen(major ? pal.text3 : pal.line, 1));
         p.drawLine(QPointF(x + 0.5, m_rulerH - (major ? 8 : 4)), QPointF(x + 0.5, m_rulerH));
+        if (button && f >= 0 && f < 4) {
+            const QString& full = states[f];
+            const bool fits = QFontMetrics(p.font()).horizontalAdvance(full) + 2 <= m_cellW;
+            p.setPen(pal.accent);
+            p.drawText(QRectF(x, 2, m_cellW, m_rulerH - 10), Qt::AlignHCenter | Qt::AlignVCenter, fits ? full : full.left(1));
+            continue;
+        }
         const int step = m_cellW < 9 ? 10 : 5;
         if ((f + 1) % step == 0 || f == 0) {
             p.setPen(pal.text2);

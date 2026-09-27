@@ -2,8 +2,8 @@
 #include "TestMain.h"
 
 #include "core/DocumentOps.h"
-#include "render/Blend.h"
 #include "core/VectorBrush.h"
+#include "render/Blend.h"
 #include "render/Filters.h"
 #include "render/Raster.h"
 #include "render/Renderer.h"
@@ -207,6 +207,66 @@ VX_TEST(document_frame_render)
     const QImage masked = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, false);
     CHECK(masked.pixel(45, 20) == qRgb(255, 0, 0));
     CHECK(masked.pixel(55, 20) == qRgb(255, 255, 255));
+}
+
+VX_TEST(button_states_and_nine_slice_render)
+{
+    Document d = Document::createDefault();
+    // Button: red Up, green Over, blue Down squares.
+    Symbol b;
+    b.id = d.newSymbolId();
+    b.name = "Btn";
+    b.type = SymbolType::Button;
+    Layer bl = d.makeLayer("Layer 1");
+    bl.keys.clear();
+    const Color colors[3] = {Color(255, 0, 0), Color(0, 255, 0), Color(0, 0, 255)};
+    for (int f = 0; f < 3; ++f) {
+        Keyframe k;
+        k.start = f;
+        k.duration = 1;
+        k.elements = {makeShapeElement(graphFromRegion(Region::rect({0, 0, 20, 20}), FillStyle::solid(colors[f])), false)};
+        bl.keys.push_back(k);
+    }
+    b.timeline.layers.push_back(bl);
+    d.symbols.push_back(b);
+    auto inst = std::make_shared<InstanceElement>();
+    inst->symbolId = b.id;
+    inst->behavior = SymbolType::Button;
+    inst->matrix = Affine::translate(10, 10);
+    d.scenes[0].layers[0].keys[0].elements = {inst};
+    auto pixel = [&](RenderOptions o, int x, int y) {
+        QImage img = blank(120, 60);
+        Renderer(d, o).render(img, d.scenes[0], 0, Affine{});
+        return img.pixel(x, y);
+    };
+    CHECK(qRed(pixel({}, 20, 20)) == 255);
+    RenderOptions over;
+    over.hotButton = d.scenes[0].layers[0].keys[0].elements[0].get();
+    CHECK(qGreen(pixel(over, 20, 20)) == 255 && qRed(pixel(over, 20, 20)) == 0);
+    over.hotState = ButtonState::Down;
+    CHECK(qBlue(pixel(over, 20, 20)) == 255);
+
+    // 9-slice: a 40x20 panel with a 4 px dark border scaled 2.5x wide keeps a
+    // 4 px border on the left instead of a 10 px one.
+    Document p = Document::createDefault();
+    ShapeGraph panel = graphFromRegion(Region::rect({0, 0, 40, 20}), FillStyle::solid(Color(0, 0, 0)));
+    panel = overlay(panel, graphFromRegion(Region::rect({4, 4, 36, 16}), FillStyle::solid(Color(255, 255, 255))));
+    auto pi = convertToSymbol(p, {makeShapeElement(panel, false)}, "Panel", SymbolType::MovieClip, {0, 0});
+    pi->matrix = Affine::scale(2.5, 1.0);
+    p.scenes[0].layers[0].keys[0].elements = {pi};
+    auto render = [&]() {
+        QImage img = blank(120, 30);
+        Renderer(p).render(img, p.scenes[0], 0, Affine{});
+        return img;
+    };
+    QImage plain = render();
+    CHECK(qRed(plain.pixel(6, 10)) < 20); // border stretched to 10 px
+    p.symbols.back().scale9 = Rect(4, 4, 36, 16);
+    QImage sliced = render();
+    CHECK(qRed(sliced.pixel(6, 10)) > 235);  // inside the white middle
+    CHECK(qRed(sliced.pixel(2, 10)) < 20);   // border still 4 px wide
+    CHECK(qRed(sliced.pixel(97, 10)) < 20);  // right border ends at 100
+    CHECK(qRed(sliced.pixel(94, 10)) > 235);
 }
 
 int main(int argc, char** argv)

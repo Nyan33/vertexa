@@ -341,6 +341,13 @@ void Editor::setOnion(bool on, bool outline)
     emit onionChanged();
 }
 
+void Editor::setSimpleButtons(bool on)
+{
+    if (on == m_simpleButtons) return;
+    m_simpleButtons = on;
+    emit simpleButtonsChanged(on);
+}
+
 void Editor::tick()
 {
     const int count = timeline().frameCount();
@@ -376,17 +383,27 @@ void Editor::clearSelection()
     emit selectionChanged();
 }
 
+ElementPtr Editor::shownElement(const ElementRef& r) const
+{
+    const Timeline& tl = timeline();
+    const int li = tl.layerIndex(r.layerId);
+    if (li < 0) return nullptr;
+    const Layer& l = tl.layers[li];
+    const Keyframe* k = l.keyAt(m_frame);
+    if (!k || r.index < 0 || r.index >= int(k->elements.size())) return nullptr;
+    if (inClassicTween(l, m_frame)) {
+        // A classic tween evaluates to one item per keyframe element.
+        const std::vector<EvalItem> items = evaluateLayer(m_doc, tl, li, m_frame);
+        if (r.index < int(items.size())) return items[r.index].element;
+    }
+    return k->elements[r.index];
+}
+
 std::vector<ElementPtr> Editor::selectedElements() const
 {
     std::vector<ElementPtr> out;
-    const Timeline& tl = timeline();
-    for (const ElementRef& r : m_selection) {
-        const Layer* l = tl.layerById(r.layerId);
-        if (!l) continue;
-        const Keyframe* k = l->keyAt(m_frame);
-        if (!k || r.index < 0 || r.index >= int(k->elements.size())) continue;
-        out.push_back(k->elements[r.index]);
-    }
+    for (const ElementRef& r : m_selection)
+        if (ElementPtr e = shownElement(r)) out.push_back(std::move(e));
     return out;
 }
 
@@ -453,6 +470,14 @@ Keyframe* Editor::editableKey(Document& d, int layerIndex, QString* why) const
     Timeline& tl = mutableTimeline(d);
     Layer& l = tl.layers[layerIndex];
     if (m_frame >= l.length()) vx::insertKeyframe(d, tl, layerIndex, m_frame, true);
+    return tl.layers[layerIndex].keyAt(m_frame);
+}
+
+Keyframe* Editor::selectionKey(Document& d, int layerIndex) const
+{
+    Timeline& tl = mutableTimeline(d);
+    if (layerIndex < 0 || layerIndex >= int(tl.layers.size())) return nullptr;
+    if (inClassicTween(tl.layers[layerIndex], m_frame)) vx::insertKeyframe(d, tl, layerIndex, m_frame, false);
     return tl.layers[layerIndex].keyAt(m_frame);
 }
 

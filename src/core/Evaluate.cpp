@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Evaluate.h"
+#include "ShapeOps.h"
 #include "ShapeTween.h"
 #include "Tween.h"
 
@@ -66,7 +67,7 @@ std::vector<EvalItem> evaluateLayer(const Document& doc, const Timeline& tl, int
             const ElementPtr& a = k.elements[i];
             const ElementPtr b = i < next->elements.size() ? next->elements[i] : nullptr;
             if (!tweenable(a, b)) {
-                out.push_back({a, local});
+                out.push_back({a, local, a.get()});
                 continue;
             }
             const Vec2 pa = a->matrix.map(a->pivot), pb = b->matrix.map(b->pivot);
@@ -99,7 +100,7 @@ std::vector<EvalItem> evaluateLayer(const Document& doc, const Timeline& tl, int
                 ci->color = ColorEffect::lerp(ia.color, ib.color, t);
                 ci->filters = lerpFilters(ia.filters, ib.filters, t);
             }
-            out.push_back({c, local});
+            out.push_back({c, local, a.get()});
         }
         return out;
     }
@@ -110,22 +111,23 @@ std::vector<EvalItem> evaluateLayer(const Document& doc, const Timeline& tl, int
         const double t = k.shape.ease.apply(double(local) / double(k.duration));
         auto morph = std::make_shared<MorphElement>();
         morph->data = std::make_shared<ShapeRenderData>(morphShapes(a, b, t, k.shape.angular, k.hints));
-        out.push_back({morph, local});
+        out.push_back({morph, local, nullptr});
         for (const ElementPtr& e : k.elements)
-            if (!asShape(e)) out.push_back({e, local});
+            if (!asShape(e)) out.push_back({e, local, e.get()});
         return out;
     }
 
-    for (const ElementPtr& e : k.elements) out.push_back({e, local});
+    for (const ElementPtr& e : k.elements) out.push_back({e, local, e.get()});
     return out;
 }
 
-int instanceSymbolFrame(const Document& doc, const InstanceElement& inst, int localFrame, int clipFrame)
+int instanceSymbolFrame(const Document& doc, const InstanceElement& inst, int localFrame, int clipFrame, ButtonState button)
 {
     const Symbol* s = doc.symbol(inst.symbolId);
     if (!s) return 0;
     const int len = s->timeline.frameCount();
     if (len <= 1) return 0;
+    if (inst.behavior == SymbolType::Button) return std::min(int(button), len - 1);
     if (inst.behavior != SymbolType::Graphic) return ((clipFrame % len) + len) % len;
     const int first = std::clamp(inst.firstFrame, 0, len - 1);
     const int last = inst.lastFrame < 0 ? len - 1 : std::clamp(inst.lastFrame, first, len - 1);
@@ -139,6 +141,106 @@ int instanceSymbolFrame(const Document& doc, const InstanceElement& inst, int lo
     case LoopMode::PlayOnceReverse: return std::max(last - off, first);
     }
     return first;
+}
+
+int buttonHitFrame(const Document& doc, const Symbol& s)
+{
+    const int hit = 3;
+    if (s.timeline.frameCount() <= hit) return 0;
+    for (int li = 0; li < int(s.timeline.layers.size()); ++li) {
+        const Layer& l = s.timeline.layers[li];
+        if (l.type == LayerType::Guide || l.type == LayerType::Folder) continue;
+        if (!evaluateLayer(doc, s.timeline, li, hit).empty()) return hit;
+    }
+    return 0;
+}
+
+namespace {
+
+bool contentHit(const Document& doc, const Element& e, Vec2 p, double tol, int localFrame, int depth);
+
+bool timelineHit(const Document& doc, const Timeline& tl, int frame, Vec2 p, double tol, int depth)
+{
+    for (int li = 0; li < int(tl.layers.size()); ++li) {
+        const Layer& l = tl.layers[li];
+        if (l.type == LayerType::Guide || l.type == LayerType::Folder || l.type == LayerType::Mask || !l.visible) continue;
+        for (const EvalItem& it : evaluateLayer(doc, tl, li, frame))
+            if (contentHit(doc, *it.element, p, tol, it.localFrame, depth + 1)) return true;
+    }
+    return false;
+}
+
+bool contentHit(const Document& doc, const Element& e, Vec2 p, double tol, int localFrame, int depth)
+{
+    if (depth > 32) return false;
+    const Affine inv = e.matrix.inverted();
+    const Vec2 q = inv.map(p);
+    const double ltol = tol * inv.meanScale();
+    switch (e.type()) {
+    case ElementType::Shape: {
+        const auto& s = static_cast<const ShapeElement&>(e);
+        return s.graph && hitTest(*s.graph, q, ltol).kind != ShapeHit::Kind::None;
+    }
+    case ElementType::Morph: {
+        const auto& m = static_cast<const MorphElement&>(e);
+        return m.data && m.data->bounds.inflated(ltol).contains(q);
+    }
+    case ElementType::Group:
+        for (const ElementPtr& c : static_cast<const GroupElement&>(e).children)
+            if (contentHit(doc, *c, q, ltol, localFrame, depth + 1)) return true;
+        return false;
+    case ElementType::Instance: {
+        const auto& in = static_cast<const InstanceElement&>(e);
+        const Symbol* sym = doc.symbol(in.symbolId);
+        if (!sym || !in.visible) return false;
+        return timelineHit(doc, sym->timeline, instanceSymbolFrame(doc, in, localFrame), q, ltol, depth);
+    }
+    }
+    return false;
+}
+
+const Element* buttonIn(const Document& doc, const Timeline& tl, int frame, Vec2 p, double tol, int clipFrame, int depth);
+
+const Element* buttonInElement(const Document& doc, const Element& e, const Element* source, int localFrame, Vec2 p, double tol,
+                               int clipFrame, int depth)
+{
+    const Affine inv = e.matrix.inverted();
+    const Vec2 q = inv.map(p);
+    const double ltol = tol * inv.meanScale();
+    if (e.type() == ElementType::Group) {
+        const auto& g = static_cast<const GroupElement&>(e);
+        for (auto it = g.children.rbegin(); it != g.children.rend(); ++it)
+            if (const Element* b = buttonInElement(doc, **it, it->get(), localFrame, q, ltol, clipFrame, depth + 1)) return b;
+        return nullptr;
+    }
+    if (e.type() != ElementType::Instance) return nullptr;
+    const auto* in = static_cast<const InstanceElement*>(&e);
+    if (!in->visible) return nullptr;
+    const Symbol* sym = doc.symbol(in->symbolId);
+    if (!sym) return nullptr;
+    if (in->behavior == SymbolType::Button)
+        return timelineHit(doc, sym->timeline, buttonHitFrame(doc, *sym), q, ltol, depth) ? source : nullptr;
+    return buttonIn(doc, sym->timeline, instanceSymbolFrame(doc, *in, localFrame, clipFrame), q, ltol, clipFrame, depth + 1);
+}
+
+const Element* buttonIn(const Document& doc, const Timeline& tl, int frame, Vec2 p, double tol, int clipFrame, int depth)
+{
+    if (depth > 32) return nullptr;
+    for (int li = 0; li < int(tl.layers.size()); ++li) {
+        const Layer& l = tl.layers[li];
+        if (l.type == LayerType::Guide || l.type == LayerType::Folder || l.type == LayerType::Mask || !l.visible) continue;
+        const std::vector<EvalItem> items = evaluateLayer(doc, tl, li, frame);
+        for (auto it = items.rbegin(); it != items.rend(); ++it)
+            if (const Element* b = buttonInElement(doc, *it->element, it->source, it->localFrame, p, tol, clipFrame, depth)) return b;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+const Element* buttonAt(const Document& doc, const Timeline& tl, int frame, Vec2 p, double tol, int clipFrame)
+{
+    return buttonIn(doc, tl, frame, p, tol, clipFrame, 0);
 }
 
 Rect elementBounds(const Document& doc, const Element& e, int localFrame, int depth)

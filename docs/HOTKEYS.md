@@ -118,6 +118,7 @@ In the timeline panel itself:
 | 100% / Fit stage | `Ctrl+1` / `Ctrl+2` |
 | New / Open / Save / Save As | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` |
 | Import FLA / XFL | `Ctrl+R` (Open also accepts `.fla` and `.xfl`) |
+| Enable Simple Buttons | `Ctrl+Alt+B` |
 | Export PNG sequence | `Ctrl+Alt+Shift+S` |
 | Export video (FFmpeg) | `Ctrl+Alt+Shift+E` |
 | Keyboard shortcuts | `F1` |

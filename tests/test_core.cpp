@@ -2,6 +2,8 @@
 #include "TestMain.h"
 
 #include "core/DocumentOps.h"
+#include "core/Scale9.h"
+#include "core/ShapeOps.h"
 #include "core/Evaluate.h"
 #include "core/Serialize.h"
 #include "core/ShapeTween.h"
@@ -294,6 +296,119 @@ VX_TEST(layer_drag_keeps_children)
     const int top = tl.layerIndex(1);
     CHECK(moveLayer(tl, top, int(tl.layers.size())) == int(tl.layers.size()) - 1);
     CHECK(tl.layers.back().parentId == 0);
+}
+
+namespace {
+
+ElementPtr square(double x0, double y0, double x1, double y1, Color c)
+{
+    return makeShapeElement(graphFromRegion(Region::rect({x0, y0, x1, y1}), FillStyle::solid(c)), false);
+}
+
+/// A button whose Up/Over/Down frames are 20x20 squares of different colours
+/// and whose Hit frame is a larger 40x40 square.
+std::string makeButton(Document& d)
+{
+    Symbol s;
+    s.id = d.newSymbolId();
+    s.name = "Btn";
+    s.type = SymbolType::Button;
+    Layer l = d.makeLayer("Layer 1");
+    const Color colors[3] = {Color(255, 0, 0), Color(0, 255, 0), Color(0, 0, 255)};
+    l.keys.clear();
+    for (int f = 0; f < 4; ++f) {
+        Keyframe k;
+        k.start = f;
+        k.duration = 1;
+        k.elements = {f < 3 ? square(-10, -10, 10, 10, colors[f]) : square(-20, -20, 20, 20, Color(0, 0, 0))};
+        l.keys.push_back(k);
+    }
+    s.timeline.layers.push_back(l);
+    d.symbols.push_back(s);
+    return s.id;
+}
+
+} // namespace
+
+VX_TEST(button_states_and_hit_area)
+{
+    Document d = Document::createDefault();
+    const std::string id = makeButton(d);
+    auto inst = std::make_shared<InstanceElement>();
+    inst->symbolId = id;
+    inst->behavior = SymbolType::Button;
+    inst->matrix = Affine::translate(100, 100);
+    d.scenes[0].layers[0].keys[0].elements = {inst};
+    // Frames per state; the Hit frame is never shown, and playback does not
+    // run through a button's frames.
+    CHECK(instanceSymbolFrame(d, *inst, 7, 5) == 0);
+    CHECK(instanceSymbolFrame(d, *inst, 0, 0, ButtonState::Over) == 1);
+    CHECK(instanceSymbolFrame(d, *inst, 0, 0, ButtonState::Down) == 2);
+    CHECK(buttonHitFrame(d, *d.symbol(id)) == 3);
+    // The Hit frame (40x40) defines where the button reacts.
+    const Element* key = d.scenes[0].layers[0].keys[0].elements[0].get();
+    CHECK(buttonAt(d, d.scenes[0], 0, {115, 115}, 0.5) == key);
+    CHECK(buttonAt(d, d.scenes[0], 0, {125, 100}, 0.5) == nullptr);
+    // Without a Hit frame the Up frame is used.
+    d.symbol(id)->timeline.layers[0].keys.pop_back();
+    CHECK(buttonHitFrame(d, *d.symbol(id)) == 0);
+    CHECK(buttonAt(d, d.scenes[0], 0, {115, 115}, 0.5) == nullptr);
+    CHECK(buttonAt(d, d.scenes[0], 0, {105, 105}, 0.5) == key);
+    // Buttons inside movie clips are found too; a movie clip placed as a
+    // button behaves like one.
+    auto clip = convertToSymbol(d, {inst}, "Holder", SymbolType::MovieClip, {0, 0});
+    clip->matrix = Affine::translate(50, 0);
+    d.scenes[0].layers[0].keys[0].elements = {clip};
+    CHECK(buttonAt(d, d.scenes[0], 0, {155, 105}, 0.5) == d.symbols.back().timeline.layers[0].keys[0].elements[0].get());
+    CHECK(buttonAt(d, d.scenes[0], 0, {105, 105}, 0.5) == nullptr);
+}
+
+VX_TEST(nine_slice_keeps_corners)
+{
+    // A 100x50 panel with 10 px corners and a small circle in the top-left corner.
+    const Rect bounds(0, 0, 100, 50), grid(10, 10, 90, 40);
+    const auto s = Slice9::make(grid, bounds, 3.0, 2.0);
+    CHECK(s.has_value());
+    // Corners keep their size after the instance scale (local size / scale).
+    CHECK(std::abs(s->map({10, 10}).x * 3.0 - 10) < 1e-9 && std::abs(s->map({10, 10}).y * 2.0 - 10) < 1e-9);
+    CHECK(std::abs(s->map({0, 0}).x) < 1e-9 && std::abs(s->map({100, 50}).x - 100) < 1e-9 && std::abs(s->map({100, 50}).y - 50) < 1e-9);
+    CHECK(std::abs((s->map({100, 50}).x - s->map({90, 40}).x) * 3.0 - 10) < 1e-9);
+    // Shapes are split at the guides and mapped exactly.
+    ShapeGraph g = graphFromRegion(Region::rect(bounds), FillStyle::solid(Color(0, 0, 0)));
+    g = overlay(g, graphFromRegion(Region::circle({5, 5}, 4), FillStyle::solid(Color(255, 0, 0))));
+    const ShapeGraph out = s->apply(g);
+    CHECK(out.edges.size() > g.edges.size());
+    const Rect ob = out.bounds(false);
+    CHECK(std::abs(ob.x1 - 100) < 1e-6 && std::abs(ob.y1 - 50) < 1e-6);
+    const Region circle = out.fillRegion(2);
+    CHECK(std::abs(circle.bounds().width() * 3.0 - 8) < 1e-6 && std::abs(circle.bounds().height() * 2.0 - 8) < 1e-6);
+    // Too small for the corners: they shrink, the middle vanishes.
+    const auto tiny = Slice9::make(grid, bounds, 0.1, 1.0);
+    CHECK(tiny && std::abs(tiny->map({90, 0}).x - tiny->map({10, 0}).x) < 1e-9);
+    // No scale, no slicing; the instance helper reads the symbol's grid.
+    CHECK(!Slice9::make(grid, bounds, 1.0, 1.0));
+    Document d = Document::createDefault();
+    auto inst = convertToSymbol(d, {makeShapeElement(g, false)}, "Panel", SymbolType::MovieClip, {0, 0});
+    CHECK(!instanceSlice9(d, *inst, 0));
+    d.symbols.back().scale9 = grid;
+    inst->matrix = Affine::scale(3, 2);
+    CHECK(instanceSlice9(d, *inst, 0).has_value());
+}
+
+VX_TEST(library_folders_and_scale9_serialize)
+{
+    Document d = Document::createDefault();
+    auto inst = convertToSymbol(d, {redSquare(0, 0)}, "Box", SymbolType::MovieClip, {0, 0});
+    d.symbols.back().folder = "Props/Boxes";
+    d.symbols.back().scale9 = Rect(2, 2, 8, 8);
+    d.libraryFolders = {"Empty"};
+    const auto folders = d.allLibraryFolders();
+    CHECK(folders == (std::vector<std::string>{"Empty", "Props", "Props/Boxes"}));
+    Document back;
+    CHECK(deserializeDocument(serializeDocument(d), back));
+    CHECK(back.symbols.back().folder == "Props/Boxes");
+    CHECK(back.symbols.back().scale9 && *back.symbols.back().scale9 == Rect(2, 2, 8, 8));
+    CHECK(back.libraryFolders == d.libraryFolders);
 }
 
 VX_TEST_MAIN()

@@ -99,6 +99,21 @@ ordinary shape graph that the tool merges like any other drawing.
 - `makeArtBrush()` / `linesToFills()` make a brush from a selection; brushes
   made that way are stored in `Document::brushes` and saved in the `.vtx`.
 
+### Symbols: buttons and 9-slice
+
+- `instanceSymbolFrame()` maps an instance to a frame of its symbol: graphics
+  follow their loop options, movie clips the playback frame, buttons the frame
+  of their state (Up, Over, Down). `buttonAt()` finds the topmost button whose
+  Hit frame (or Up frame when Hit is empty) contains a point, through nested
+  symbols. It returns `EvalItem::source`, the keyframe element an evaluated
+  item comes from, which stays the same across tween evaluation. The stage's
+  hot button and its state travel to the renderer in `RenderOptions`.
+- `Scale9` — 9-slice scaling. For an instance scaled by (sx, sy) the symbol
+  space is remapped piecewise-linearly so the corners keep their size. Edges
+  are split exactly where they cross the guides (cubic roots), so each piece
+  lies in one cell and is mapped by one affine map. The renderer and SVG
+  export apply it to the symbol's own shapes; nested symbols scale normally.
+
 ### Filters: `Filter`
 
 `Filter` holds the seven Animate filters with their parameters and SWF

@@ -18,6 +18,9 @@ void removeFrames(Layer& l, int frame, int count = 1);
 /// or a blank keyframe. Returns the frame where the keyframe was created, or
 /// -1. On an existing keyframe the next frame is converted (like Animate).
 int insertKeyframe(const Document& doc, Timeline& tl, int layerIndex, int frame, bool blank);
+
+/// True on the in-between frames of a classic tween (not on its keyframe).
+bool inClassicTween(const Layer& l, int frame);
 /// Shift+F6 — clear keyframe (the span joins the previous keyframe).
 bool clearKeyframe(Layer& l, int frame);
 /// Convert every frame of [from, to] to (blank) keyframes.

@@ -84,6 +84,14 @@ int insertKeyframe(const Document& doc, Timeline& tl, int layerIndex, int frame,
     return frame;
 }
 
+bool inClassicTween(const Layer& l, int frame)
+{
+    const int ki = l.keyIndexAt(frame);
+    if (ki < 0 || ki + 1 >= int(l.keys.size())) return false;
+    const Keyframe& k = l.keys[ki];
+    return k.tween == TweenType::Classic && frame > k.start && !l.keys[ki + 1].elements.empty();
+}
+
 bool clearKeyframe(Layer& l, int frame)
 {
     l.normalize();

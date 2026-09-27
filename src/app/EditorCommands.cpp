@@ -248,7 +248,7 @@ void Editor::transformSelection(const Affine& m, const QString& label)
         for (const ElementRef& r : sel) {
             const int li = tl.layerIndex(r.layerId);
             if (li < 0 || tl.layers[li].locked) continue;
-            Keyframe* k = tl.layers[li].keyAt(m_frame);
+            Keyframe* k = selectionKey(d, li);
             if (!k || r.index < 0 || r.index >= int(k->elements.size())) continue;
             ElementPtr& e = k->elements[r.index];
             if (const ShapeElement* s = asShape(e); s && !s->isObject) {
@@ -305,7 +305,19 @@ void Editor::transformSelection(const Affine& m, const QString& label)
     emit selectionChanged();
 }
 
-void Editor::convertSelectionToSymbol(const QString& name, SymbolType type, int registration)
+namespace {
+
+/// Guides one third in from each side of a symbol's first frame.
+std::optional<Rect> thirdsGrid(const Document& d, const Symbol& s)
+{
+    Rect b = timelineBounds(d, s.timeline, 0);
+    if (b.isEmpty() || b.width() < 1e-6 || b.height() < 1e-6) b = Rect(-50, -50, 50, 50);
+    return Rect(b.x0 + b.width() / 3, b.y0 + b.height() / 3, b.x1 - b.width() / 3, b.y1 - b.height() / 3);
+}
+
+} // namespace
+
+void Editor::convertSelectionToSymbol(const QString& name, SymbolType type, int registration, const std::string& folder, bool scale9)
 {
     if (!hasSelection()) return;
     const auto sel = m_selection;
@@ -336,6 +348,8 @@ void Editor::convertSelectionToSymbol(const QString& name, SymbolType type, int 
         Rect b;
         for (const ElementPtr& e : els) b.include(elementBounds(d, *e));
         auto inst = vx::convertToSymbol(d, els, name.toStdString(), type, registrationPoint(b, registration));
+        d.symbols.back().folder = folder;
+        if (scale9) d.symbols.back().scale9 = thirdsGrid(d, d.symbols.back());
         Timeline& tl2 = mutableTimeline(d); // symbols vector may have reallocated
         Keyframe* k = tl2.layers[targetLayer].keyAt(m_frame);
         if (!k) return false;
@@ -367,7 +381,7 @@ void Editor::breakApart()
         for (auto& [li, idx] : byLayer) {
             std::sort(idx.begin(), idx.end(), std::greater<int>());
             for (int i : idx) {
-                Keyframe* k = tl.layers[li].keyAt(m_frame);
+                Keyframe* k = selectionKey(d, li);
                 if (!k || i < 0 || i >= int(k->elements.size())) continue;
                 const ElementPtr e = k->elements[i];
                 if (const ShapeElement* s = asShape(e); s && !s->isObject) continue;
@@ -434,7 +448,7 @@ void Editor::ungroupSelection()
         for (const ElementRef& r : sorted) {
             const int li = tl.layerIndex(r.layerId);
             if (li < 0) continue;
-            Keyframe* k = tl.layers[li].keyAt(m_frame);
+            Keyframe* k = selectionKey(d, li);
             if (!k || r.index < 0 || r.index >= int(k->elements.size())) continue;
             const GroupElement* g = asGroup(k->elements[r.index]);
             if (!g) continue;
@@ -646,7 +660,7 @@ void Editor::setInstanceProperty(const std::function<void(InstanceElement&)>& fn
         bool changed = false;
         for (const ElementRef& r : sel) {
             const int li = tl.layerIndex(r.layerId);
-            Keyframe* k = li >= 0 ? tl.layers[li].keyAt(m_frame) : nullptr;
+            Keyframe* k = selectionKey(d, li);
             if (!k || r.index < 0 || r.index >= int(k->elements.size())) continue;
             const InstanceElement* in = asInstance(k->elements[r.index]);
             if (!in) continue;
@@ -667,7 +681,7 @@ void Editor::setElementMatrix(int selIndex, const Affine& m)
     edit(tr("Transform"), [&](Document& d) {
         Timeline& tl = mutableTimeline(d);
         const int li = tl.layerIndex(r.layerId);
-        Keyframe* k = li >= 0 ? tl.layers[li].keyAt(m_frame) : nullptr;
+        Keyframe* k = selectionKey(d, li);
         if (!k || r.index < 0 || r.index >= int(k->elements.size())) return false;
         ElementPtr& e = k->elements[r.index];
         if (const ShapeElement* s = asShape(e); s && !s->isObject) {
@@ -1087,7 +1101,7 @@ void Editor::toggleOthersHidden(int index)
 
 // --- symbols ------------------------------------------------------------------
 
-void Editor::newSymbol(const QString& name, SymbolType type)
+void Editor::newSymbol(const QString& name, SymbolType type, const std::string& folder, bool scale9)
 {
     std::string id;
     edit(tr("New Symbol"), [&](Document& d) {
@@ -1095,6 +1109,8 @@ void Editor::newSymbol(const QString& name, SymbolType type)
         s.id = d.newSymbolId();
         s.name = d.uniqueSymbolName(name.isEmpty() ? "Symbol 1" : name.toStdString());
         s.type = type;
+        s.folder = folder;
+        if (scale9) s.scale9 = Rect(-50, -50, 50, 50);
         s.timeline.name = s.name;
         s.timeline.layers.push_back(d.makeLayer("Layer 1"));
         id = s.id;
@@ -1145,6 +1161,107 @@ void Editor::setSymbolType(const std::string& id, SymbolType type)
         if (!s || s->type == type) return false;
         s->type = type;
         return true;
+    });
+}
+
+void Editor::setSymbolScale9(const std::string& id, std::optional<Rect> grid)
+{
+    edit(grid ? tr("9-Slice Guides") : tr("Disable 9-Slice Scaling"), [&](Document& d) {
+        Symbol* s = d.symbol(id);
+        if (!s || s->scale9 == grid) return false;
+        s->scale9 = grid;
+        return true;
+    });
+}
+
+std::optional<Rect> Editor::defaultScale9(const std::string& id) const
+{
+    const Symbol* s = m_doc.symbol(id);
+    return s ? thirdsGrid(m_doc, *s) : std::nullopt;
+}
+
+namespace {
+
+std::string parentFolder(const std::string& path)
+{
+    const size_t slash = path.rfind('/');
+    return slash == std::string::npos ? std::string() : path.substr(0, slash);
+}
+
+/// `path` with the prefix `from` replaced by `to` (whole path components).
+bool rebase(std::string& path, const std::string& from, const std::string& to)
+{
+    if (path == from) {
+        path = to;
+        return true;
+    }
+    if (path.size() > from.size() && path.compare(0, from.size(), from) == 0 && path[from.size()] == '/') {
+        path = to.empty() ? path.substr(from.size() + 1) : to + path.substr(from.size());
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+void Editor::createLibraryFolder(const std::string& path)
+{
+    if (path.empty()) return;
+    edit(tr("New Folder"), [&](Document& d) {
+        const auto all = d.allLibraryFolders();
+        if (std::find(all.begin(), all.end(), path) != all.end()) return false;
+        d.libraryFolders.push_back(path);
+        return true;
+    });
+}
+
+void Editor::moveSymbolToFolder(const std::string& id, const std::string& folder)
+{
+    edit(tr("Move to Folder"), [&](Document& d) {
+        Symbol* s = d.symbol(id);
+        if (!s || s->folder == folder) return false;
+        s->folder = folder;
+        return true;
+    });
+}
+
+void Editor::renameLibraryFolder(const std::string& path, const std::string& newName)
+{
+    if (path.empty() || newName.empty() || newName.find('/') != std::string::npos) return;
+    const std::string parent = parentFolder(path);
+    const std::string to = parent.empty() ? newName : parent + "/" + newName;
+    if (to == path) return;
+    edit(tr("Rename Folder"), [&](Document& d) {
+        const auto all = d.allLibraryFolders();
+        if (std::find(all.begin(), all.end(), to) != all.end()) {
+            notify(tr("A folder with that name already exists"));
+            return false;
+        }
+        bool changed = false;
+        for (std::string& f : d.libraryFolders) changed |= rebase(f, path, to);
+        for (Symbol& s : d.symbols) changed |= rebase(s.folder, path, to);
+        return changed;
+    });
+}
+
+void Editor::deleteLibraryFolder(const std::string& path)
+{
+    if (path.empty()) return;
+    const std::string parent = parentFolder(path);
+    edit(tr("Delete Folder"), [&](Document& d) {
+        bool changed = false;
+        std::vector<std::string> kept;
+        for (std::string f : d.libraryFolders) {
+            if (f == path) {
+                changed = true;
+                continue;
+            }
+            changed |= rebase(f, path, parent);
+            kept.push_back(f);
+        }
+        d.libraryFolders = kept;
+        for (Symbol& s : d.symbols) changed |= rebase(s.folder, path, parent);
+        return changed;
     });
 }
 

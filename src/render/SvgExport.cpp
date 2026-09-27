@@ -2,6 +2,8 @@
 #include "SvgExport.h"
 
 #include "core/Evaluate.h"
+#include "core/Scale9.h"
+#include "core/ShapeTween.h"
 
 #include <QFile>
 #include <QRegularExpression>
@@ -169,14 +171,22 @@ public:
         const Affine m = parent * e.matrix;
         switch (e.type()) {
         case ElementType::Shape:
-            shape(static_cast<const ShapeElement&>(e).graph->renderData(), m, ct);
+            if (m_slice) shape(m_slice->apply(*static_cast<const ShapeElement&>(e).graph, m_toSymbol * e.matrix).renderData(), m_sliceBase, ct);
+            else shape(static_cast<const ShapeElement&>(e).graph->renderData(), m, ct);
             break;
         case ElementType::Morph:
-            if (const auto& d = static_cast<const MorphElement&>(e).data) shape(*d, m, ct);
+            if (const auto& d = static_cast<const MorphElement&>(e).data) {
+                if (m_slice) shape(m_slice->apply(graphFromRenderData(*d), m_toSymbol * e.matrix).renderData(), m_sliceBase, ct);
+                else shape(*d, m, ct);
+            }
             break;
-        case ElementType::Group:
-            for (const ElementPtr& c : static_cast<const GroupElement&>(e).children) element({c, it.localFrame}, m, ct, depth);
+        case ElementType::Group: {
+            const Affine saved = m_toSymbol;
+            m_toSymbol = m_toSymbol * e.matrix;
+            for (const ElementPtr& c : static_cast<const GroupElement&>(e).children) element({c, it.localFrame, c.get()}, m, ct, depth);
+            m_toSymbol = saved;
             break;
+        }
         case ElementType::Instance: {
             const auto& in = static_cast<const InstanceElement&>(e);
             const Symbol* s = m_doc.symbol(in.symbolId);
@@ -185,7 +195,18 @@ public:
             const QString filter = in.behavior != SymbolType::Graphic ? svgFilter(in.filters) : QString();
             if (!blend.isEmpty()) body += QString("<g style=\"mix-blend-mode:%1\">").arg(blend);
             if (!filter.isEmpty()) body += QString("<g filter=\"url(#%1)\">").arg(filter);
-            timeline(s->timeline, instanceSymbolFrame(m_doc, in, it.localFrame), m, ct * in.color.toTransform(), depth + 1);
+            const int frame = instanceSymbolFrame(m_doc, in, it.localFrame);
+            // 9-slice applies to this symbol's own shapes; nested symbols scale normally.
+            const std::optional<Slice9> slice = instanceSlice9(m_doc, in, frame);
+            const Slice9* savedSlice = m_slice;
+            const Affine savedBase = m_sliceBase, savedTo = m_toSymbol;
+            m_slice = slice ? &*slice : nullptr;
+            m_sliceBase = m;
+            m_toSymbol = {};
+            timeline(s->timeline, frame, m, ct * in.color.toTransform(), depth + 1);
+            m_slice = savedSlice;
+            m_sliceBase = savedBase;
+            m_toSymbol = savedTo;
             if (!filter.isEmpty()) body += "</g>";
             if (!blend.isEmpty()) body += "</g>";
             break;
@@ -235,6 +256,8 @@ public:
 private:
     const Document& m_doc;
     int m_ids = 0;
+    const Slice9* m_slice = nullptr; ///< 9-slice of the enclosing instance
+    Affine m_sliceBase, m_toSymbol;
 };
 
 } // namespace

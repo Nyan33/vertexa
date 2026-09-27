@@ -420,6 +420,12 @@ public:
             s.name = (slash >= 0 ? full.mid(slash + 1) : full).toStdString();
             s.folder = slash >= 0 ? full.left(slash).toStdString() : std::string();
             s.type = parseSymbolType(item->attr("symbolType"));
+            if (item->attr("scaleGridLeft").size()) {
+                // 9-slice guides, in pixels of the symbol's space.
+                const double l = item->attr("scaleGridLeft").toDouble(), r = item->attr("scaleGridRight").toDouble();
+                const double t = item->attr("scaleGridTop").toDouble(), b = item->attr("scaleGridBottom").toDouble();
+                if (r > l && b > t) s.scale9 = Rect(l, t, r, b);
+            }
             m_symbols.insert(full, s.id);
             m_doc.symbols.push_back(std::move(s));
             items.emplace_back(std::move(item), m_doc.symbols.size() - 1);

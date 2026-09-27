@@ -70,6 +70,7 @@ struct Rect {
         return {std::min(a.x, b.x), std::min(a.y, b.y), std::max(a.x, b.x), std::max(a.y, b.y)};
     }
     static Rect fromXYWH(double x, double y, double w, double h) { return {x, y, x + w, y + h}; }
+    constexpr bool operator==(const Rect&) const = default;
 
     bool isEmpty() const { return !(x1 >= x0 && y1 >= y0); }
     double width() const { return isEmpty() ? 0.0 : x1 - x0; }

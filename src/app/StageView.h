@@ -101,6 +101,17 @@ private:
     QPointF m_zoomAnchor;
     QPointF m_lastWidget;
     bool m_hasPointer = false;
+    /// Simple buttons: the button under the pointer and whether it is down.
+    const Element* m_hotButton = nullptr;
+    bool m_buttonDown = false;
+    bool updateHotButton(Vec2 pos);
+    /// 9-slice guides of the symbol being edited: 0/1 left/right, 2/3 top/bottom.
+    const Symbol* sliceSymbol() const;
+    int guideAt(Vec2 pos) const;
+    void drawSliceGuides(QPainter& p);
+    int m_guideDrag = -1;
+    int m_guideHover = -1;
+    Rect m_guideGrid;
 };
 
 } // namespace vx::app

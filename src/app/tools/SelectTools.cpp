@@ -310,7 +310,7 @@ void SelectionTool::previewMove(Vec2 delta, bool copy)
     for (const ElementRef& r : ed->selection()) {
         const int li = tl.layerIndex(r.layerId);
         if (li < 0 || tl.layers[li].locked) continue;
-        Keyframe* k = tl.layers[li].keyAt(ed->frame());
+        Keyframe* k = ed->selectionKey(d, li);
         if (!k || r.index < 0 || r.index >= int(k->elements.size())) continue;
         const ElementPtr e = k->elements[r.index];
         ElementPtr moved;
@@ -916,7 +916,7 @@ void FreeTransformTool::preview(const Affine& t)
     Timeline& tl = ed->mutableTimeline(d);
     for (const ElementRef& r : ed->selection()) {
         const int li = tl.layerIndex(r.layerId);
-        Keyframe* k = li >= 0 ? tl.layers[li].keyAt(ed->frame()) : nullptr;
+        Keyframe* k = ed->selectionKey(d, li);
         if (!k || r.index < 0 || r.index >= int(k->elements.size())) continue;
         ElementPtr& e = k->elements[r.index];
         if (const ShapeElement* s = asShape(e); s && !s->isObject) {
@@ -994,7 +994,7 @@ void FreeTransformTool::release(const ToolEvent& e)
             ed->edit(QObject::tr("Move Transformation Point"), [&](Document& d) {
                 Timeline& tl = ed->mutableTimeline(d);
                 const int li = tl.layerIndex(ref.layerId);
-                Keyframe* k = li >= 0 ? tl.layers[li].keyAt(ed->frame()) : nullptr;
+                Keyframe* k = ed->selectionKey(d, li);
                 if (!k || ref.index >= int(k->elements.size())) return false;
                 auto c = k->elements[ref.index]->clone();
                 c->pivot = local;

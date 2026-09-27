@@ -205,6 +205,81 @@ VX_TEST(symbols_tweens_and_edit_in_place)
     CHECK(!f.ed.inSymbol());
 }
 
+VX_TEST(tweened_frames_select_and_transform_what_is_shown)
+{
+    Fixture f;
+    f.drag(ToolId::Oval, {{100, 300}, {160, 360}});
+    f.ed.selectAll();
+    f.ed.convertSelectionToSymbol("Dot", SymbolType::MovieClip, 4);
+    f.ed.setFrame(10);
+    f.ed.insertKeyframe(false);
+    f.ed.selectAll();
+    f.ed.nudge(400, 0);
+    f.ed.setFrame(0);
+    f.ed.createTween(TweenType::Classic);
+    // Half way the selection box sits on the tweened instance.
+    f.ed.setFrame(5);
+    f.ed.setTool(ToolId::Selection);
+    f.click(ToolId::Selection, {330, 330});
+    CHECK(f.ed.selection().size() == 1);
+    const Rect b = f.ed.selectionBounds();
+    CHECK(std::abs(b.center().x - 330) < 2 && std::abs(b.center().y - 330) < 2);
+    // Moving it there keys the frame with the tweened state first.
+    const int keys = int(f.ed.currentLayer()->keys.size());
+    f.ed.nudge(0, 50);
+    CHECK(int(f.ed.currentLayer()->keys.size()) == keys + 1);
+    CHECK(f.ed.currentLayer()->keys[1].start == 5 && f.ed.currentLayer()->keys[1].tween == TweenType::Classic);
+    const Rect moved = f.ed.selectionBounds();
+    CHECK(std::abs(moved.center().x - 330) < 2 && std::abs(moved.center().y - 380) < 2);
+    // Both halves still tween; the ends did not move.
+    auto centreAt = [&](int frame) {
+        const auto items = evaluateLayer(f.ed.doc(), f.ed.timeline(), f.ed.layerIndex(), frame);
+        return items.empty() ? Vec2{} : elementBounds(f.ed.doc(), *items[0].element).center();
+    };
+    CHECK(std::abs(centreAt(0).x - 130) < 2 && std::abs(centreAt(0).y - 330) < 2);
+    CHECK(std::abs(centreAt(10).x - 530) < 2 && std::abs(centreAt(10).y - 330) < 2);
+    CHECK(centreAt(3).y > 335 && centreAt(8).y > 335);
+}
+
+VX_TEST(buttons_folders_and_nine_slice_guides)
+{
+    Fixture f;
+    f.drag(ToolId::Rectangle, {{500, 300}, {600, 360}});
+    f.ed.selectAll();
+    f.ed.convertSelectionToSymbol("Play", SymbolType::Button, 4, "UI/Buttons");
+    const std::string id = f.ed.doc().symbols.back().id;
+    CHECK(f.ed.doc().symbol(id)->folder == "UI/Buttons");
+    f.ed.clearSelection();
+    // With simple buttons enabled a click presses the button instead of
+    // selecting it.
+    f.ed.setSimpleButtons(true);
+    f.click(ToolId::Selection, {550, 330});
+    CHECK(!f.ed.hasSelection());
+    f.ed.setSimpleButtons(false);
+    f.click(ToolId::Selection, {550, 330});
+    CHECK(f.ed.selection().size() == 1);
+    // Library folders.
+    f.ed.renameLibraryFolder("UI", "Interface");
+    CHECK(f.ed.doc().symbol(id)->folder == "Interface/Buttons");
+    f.ed.createLibraryFolder("Interface/Empty");
+    f.ed.deleteLibraryFolder("Interface");
+    CHECK(f.ed.doc().symbol(id)->folder == "Buttons");
+    CHECK(f.ed.doc().libraryFolders == std::vector<std::string>{"Empty"});
+    f.ed.moveSymbolToFolder(id, "");
+    CHECK(f.ed.doc().symbol(id)->folder.empty());
+    f.ed.undoStack()->undo();
+    CHECK(f.ed.doc().symbol(id)->folder == "Buttons");
+    // 9-slice guides are dragged while editing the symbol.
+    f.ed.setSymbolScale9(id, f.ed.defaultScale9(id));
+    const Rect g = *f.ed.doc().symbol(id)->scale9;
+    f.ed.enterSymbol(id);
+    QApplication::processEvents();
+    const double mid = (g.y0 + g.y1) / 2;
+    f.drag(ToolId::Selection, {{g.x0, mid}, {g.x0 - 5, mid}, {g.x0 - 10, mid}});
+    const Rect moved = *f.ed.doc().symbol(id)->scale9;
+    CHECK(std::abs(moved.x0 - (g.x0 - 10)) < 1.0 && moved.x1 == g.x1 && moved.y0 == g.y0);
+}
+
 VX_TEST(main_window_smoke)
 {
     Editor ed;

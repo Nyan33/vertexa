@@ -79,7 +79,51 @@ Document createDemoDocument()
     ball = overlay(graphFromRegion(Region::circle({0, 0}, 34), radial(Color(0x8B, 0x6C, 0xFF), Color(0x3D, 0x2B, 0xA8), {-12, -12}, 46)), ball);
     auto ballInst = convertToSymbol(d, {makeShapeElement(ball, false)}, "Ball", SymbolType::MovieClip, {0, 0});
 
+    // UI: a card that scales with 9-slice guides and a Play button with
+    // Up / Over / Down / Hit states, both in the library folder "UI".
+    ShapeGraph card = graphFromRegion(Region::roundedRect({-30, -20, 30, 20}, 12), FillStyle::solid(Color(0x1B, 0x1A, 0x22)));
+    card = overlay(card, graphFromRegion(Region::roundedRect({-27, -17, 27, 17}, 9), FillStyle::solid(Color(0xFF, 0xFD, 0xF8))));
+    auto cardInst = convertToSymbol(d, {makeShapeElement(card, false)}, "Card", SymbolType::MovieClip, {0, 0});
+    d.symbols.back().folder = "UI";
+    d.symbols.back().scale9 = Rect(-18, -8, 18, 8);
+    cardInst->matrix = Affine::translate(160, 68) * Affine::scale(4.0, 1.6);
+    std::shared_ptr<InstanceElement> buttonInst;
+    {
+        auto pill = [](Color c, double dy) {
+            ShapeGraph g = graphFromRegion(Region::roundedRect({-60, -20 + dy, 60, 20 + dy}, 20), FillStyle::solid(c));
+            g = overlay(g, graphFromRegion(Region::polygon({{-8, -10 + dy}, {-8, 10 + dy}, {10, dy}}), FillStyle::solid(Color(255, 255, 255))));
+            return makeShapeElement(std::move(g), false);
+        };
+        Symbol b;
+        b.id = d.newSymbolId();
+        b.name = "Play Button";
+        b.type = SymbolType::Button;
+        b.folder = "UI";
+        b.timeline.name = b.name;
+        Layer bl = d.makeLayer("Layer 1");
+        bl.keys.clear();
+        const ElementPtr states[4] = {pill(Color(0xFF, 0x5B, 0x2E), 0), pill(Color(0xFF, 0x86, 0x5E), 0), pill(Color(0xD9, 0x43, 0x1C), 2),
+                                      makeShapeElement(graphFromRegion(Region::rect({-62, -22, 62, 24}), FillStyle::solid(Color(0, 0, 0))), false)};
+        for (int f = 0; f < 4; ++f) {
+            Keyframe k;
+            k.start = f;
+            k.duration = 1;
+            k.elements = {states[f]};
+            bl.keys.push_back(std::move(k));
+        }
+        b.timeline.layers.push_back(std::move(bl));
+        buttonInst = std::make_shared<InstanceElement>();
+        buttonInst->symbolId = b.id;
+        buttonInst->behavior = SymbolType::Button;
+        buttonInst->matrix = Affine::translate(160, 68);
+        d.symbols.push_back(std::move(b));
+    }
+
     // Layers (top to bottom in the timeline) ------------------------------------
+    {
+        Layer& l = addLayer(d, tl, "UI", frames);
+        l.keys[0].elements = {cardInst, buttonInst};
+    }
     // Vector brushes: textured, art, pattern and scatter strokes (all fills).
     {
         Layer& l = addLayer(d, tl, "Vector brushes", frames);

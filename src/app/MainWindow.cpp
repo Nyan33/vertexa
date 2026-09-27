@@ -168,9 +168,9 @@ void MainWindow::createActions()
 
     // Insert
     add("newSymbol", tr("New &Symbol…"), QKeySequence("Ctrl+F8"), [this, ed] {
-        ConvertToSymbolDialog dlg(QString::fromStdString(ed->doc().uniqueSymbolName("Symbol 1")), this);
+        ConvertToSymbolDialog dlg(QString::fromStdString(ed->doc().uniqueSymbolName("Symbol 1")), ed->doc().allLibraryFolders(), this);
         dlg.setWindowTitle(tr("Create New Symbol"));
-        if (dlg.exec() == QDialog::Accepted) ed->newSymbol(dlg.name(), dlg.type());
+        if (dlg.exec() == QDialog::Accepted) ed->newSymbol(dlg.name(), dlg.type(), dlg.folder(), dlg.scale9());
     });
     add("newLayer", tr("New &Layer"), QKeySequence("Ctrl+Alt+N"), [ed] { ed->addLayer(); });
     add("newFolder", tr("New Layer &Folder"), {}, [ed] { ed->addFolder(); });
@@ -246,6 +246,7 @@ void MainWindow::createActions()
     add("prevFrame", tr("Previous Frame"), QKeySequence(Qt::Key_Comma), [ed] { ed->setFrame(ed->frame() - 1); }, "prev");
     add("nextFrame", tr("Next Frame"), QKeySequence(Qt::Key_Period), [ed] { ed->setFrame(ed->frame() + 1); }, "next");
     addCheck("loop", tr("Loop Playback"), {}, true, [ed](bool b) { ed->setLoopPlayback(b); });
+    addCheck("simpleButtons", tr("Enable Simple &Buttons"), QKeySequence("Ctrl+Alt+B"), false, [ed](bool b) { ed->setSimpleButtons(b); });
 
     // Tools
     for (int i = 0; i < int(ToolId::Count); ++i) {
@@ -370,6 +371,8 @@ void MainWindow::createMenus()
 
     QMenu* control = menuBar()->addMenu(tr("&Control"));
     for (const char* n : {"play", "firstFrame", "lastFrame", "prevFrame", "nextFrame", "loop"}) control->addAction(a(n));
+    control->addSeparator();
+    control->addAction(a("simpleButtons"));
 
     QMenu* tools = menuBar()->addMenu(tr("&Tools"));
     for (int i = 0; i < int(ToolId::Count); ++i) tools->addAction(m_actions.value(QString("tool%1").arg(i)));
@@ -717,8 +720,9 @@ void MainWindow::convertToSymbol()
         m_ed->notify(tr("Select something to convert to a symbol"));
         return;
     }
-    ConvertToSymbolDialog dlg(QString::fromStdString(m_ed->doc().uniqueSymbolName("Symbol 1")), this);
-    if (dlg.exec() == QDialog::Accepted) m_ed->convertSelectionToSymbol(dlg.name(), dlg.type(), dlg.registration());
+    ConvertToSymbolDialog dlg(QString::fromStdString(m_ed->doc().uniqueSymbolName("Symbol 1")), m_ed->doc().allLibraryFolders(), this);
+    if (dlg.exec() == QDialog::Accepted)
+        m_ed->convertSelectionToSymbol(dlg.name(), dlg.type(), dlg.registration(), dlg.folder(), dlg.scale9());
 }
 
 void MainWindow::toggleEditSymbol()

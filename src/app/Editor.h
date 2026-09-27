@@ -192,6 +192,10 @@ public:
     int onionBefore = 3;
     int onionAfter = 3;
     void setOnion(bool on, bool outline);
+    /// Control > Enable Simple Buttons: buttons on the stage react to the
+    /// pointer (Over / Down) and can't be selected.
+    bool simpleButtons() const { return m_simpleButtons; }
+    void setSimpleButtons(bool on);
 
     // --- selection -----------------------------------------------------------
     const std::vector<ElementRef>& selection() const { return m_selection; }
@@ -200,7 +204,10 @@ public:
     void setShapePick(ShapePick p);
     void clearSelection();
     bool hasSelection() const { return !m_selection.empty() || m_shapePick.valid(); }
+    /// Selected elements as shown at the current frame (tweened on the
+    /// in-between frames of a classic tween).
     std::vector<ElementPtr> selectedElements() const;
+    ElementPtr shownElement(const ElementRef& r) const;
     /// Bounds of the selection in timeline space.
     Rect selectionBounds() const;
     /// The merge shape of a layer at the current frame (may be null).
@@ -211,6 +218,10 @@ public:
     /// keyframe past the end of the layer). Returns nullptr with a reason if
     /// the layer can't be edited.
     Keyframe* editableKey(Document& d, int layerIndex, QString* why = nullptr) const;
+    /// Keyframe holding the selected elements of a layer at the current frame.
+    /// On an in-between frame of a classic tween a keyframe with the tweened
+    /// state is inserted first, so changes apply to what is shown.
+    Keyframe* selectionKey(Document& d, int layerIndex) const;
     bool canEdit(int layerIndex, QString* why = nullptr) const;
     void notify(const QString& message);
 
@@ -231,7 +242,8 @@ public:
     void duplicateSelection();
     void nudge(double dx, double dy);
     void transformSelection(const Affine& m, const QString& label);
-    void convertSelectionToSymbol(const QString& name, SymbolType type, int registration);
+    void convertSelectionToSymbol(const QString& name, SymbolType type, int registration, const std::string& folder = {},
+                                  bool scale9 = false);
     void breakApart();
     void groupSelection();
     void ungroupSelection();
@@ -273,11 +285,21 @@ public:
     void toggleOthersHidden(int index);
 
     // symbols
-    void newSymbol(const QString& name, SymbolType type);
+    void newSymbol(const QString& name, SymbolType type, const std::string& folder = {}, bool scale9 = false);
     void duplicateSymbol(const std::string& id);
     void deleteSymbol(const std::string& id);
     void renameSymbol(const std::string& id, const QString& name);
     void setSymbolType(const std::string& id, SymbolType type);
+    /// 9-slice scaling guides of a symbol (nothing disables 9-slice scaling).
+    void setSymbolScale9(const std::string& id, std::optional<Rect> grid);
+    /// Guides one third in from each side of the symbol's content.
+    std::optional<Rect> defaultScale9(const std::string& id) const;
+    // Library folders ("a/b" paths, "" is the root).
+    void createLibraryFolder(const std::string& path);
+    void moveSymbolToFolder(const std::string& id, const std::string& folder);
+    void renameLibraryFolder(const std::string& path, const std::string& newName);
+    /// Removes a folder; its symbols and subfolders move to its parent.
+    void deleteLibraryFolder(const std::string& path);
     void placeSymbol(const std::string& id, Vec2 timelinePos);
     void setStageSettings(double w, double h, double fps, Color bg);
 
@@ -293,6 +315,7 @@ signals:
     void settingsChanged();
     void playingChanged(bool playing);
     void onionChanged();
+    void simpleButtonsChanged(bool on);
     void message(const QString& text);
     void pathChanged();
 
@@ -314,6 +337,7 @@ private:
     std::optional<Document> m_preview;
     QString m_path;
     QUndoStack* m_undo = nullptr;
+    bool m_simpleButtons = false;
     int m_scene = 0;
     std::vector<ContextEntry> m_stack;
     int m_frame = 0;

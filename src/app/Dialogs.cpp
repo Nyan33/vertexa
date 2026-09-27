@@ -7,6 +7,7 @@
 
 #include <QAction>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QHeaderView>
@@ -79,7 +80,8 @@ private:
 
 // --- ConvertToSymbolDialog ------------------------------------------------------------------
 
-ConvertToSymbolDialog::ConvertToSymbolDialog(const QString& defaultName, QWidget* parent) : QDialog(parent)
+ConvertToSymbolDialog::ConvertToSymbolDialog(const QString& defaultName, const std::vector<std::string>& folders, QWidget* parent)
+    : QDialog(parent)
 {
     setWindowTitle(tr("Convert to Symbol"));
     auto* lay = new QVBoxLayout(this);
@@ -102,12 +104,33 @@ ConvertToSymbolDialog::ConvertToSymbolDialog(const QString& defaultName, QWidget
     g->addWidget(m_type, 1, 1);
     g->addWidget(caption(tr("Registration"), this), 2, 0);
     g->addWidget(new RegistrationGrid(&m_reg, this), 2, 1, Qt::AlignLeft);
+    m_folder = new QComboBox(this);
+    m_folder->setEditable(true);
+    m_folder->addItem(tr("Library root"), QString());
+    for (const std::string& f : folders) m_folder->addItem(QString::fromStdString(f), QString::fromStdString(f));
+    m_folder->setToolTip(tr("Pick a folder or type a new path such as Characters/Hero"));
+    g->addWidget(caption(tr("Folder"), this), 3, 0);
+    g->addWidget(m_folder, 3, 1);
+    m_scale9 = new QCheckBox(tr("Enable guides for 9-slice scaling"), this);
+    g->addWidget(m_scale9, 4, 1);
     lay->addLayout(g);
     lay->addWidget(okCancel(this));
     resize(420, 0);
 }
 
 QString ConvertToSymbolDialog::name() const { return m_name->text().trimmed(); }
+
+std::string ConvertToSymbolDialog::folder() const
+{
+    const QString text = m_folder->currentText().trimmed();
+    if (m_folder->currentIndex() == 0 && text == m_folder->itemText(0)) return {};
+    QStringList parts = text.split('/', Qt::SkipEmptyParts);
+    for (QString& p : parts) p = p.trimmed();
+    parts.removeAll(QString());
+    return parts.join('/').toStdString();
+}
+
+bool ConvertToSymbolDialog::scale9() const { return m_scale9->isChecked(); }
 
 SymbolType ConvertToSymbolDialog::type() const
 {

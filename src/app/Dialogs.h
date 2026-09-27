@@ -20,14 +20,20 @@ class Segmented;
 class ConvertToSymbolDialog : public QDialog {
     Q_OBJECT
 public:
-    ConvertToSymbolDialog(const QString& defaultName, QWidget* parent = nullptr);
+    ConvertToSymbolDialog(const QString& defaultName, const std::vector<std::string>& folders = {},
+                          QWidget* parent = nullptr);
     QString name() const;
     SymbolType type() const;
     int registration() const { return m_reg; }
+    /// Library folder ("" for the root; a new path creates the folder).
+    std::string folder() const;
+    bool scale9() const;
 
 private:
     QLineEdit* m_name;
     Segmented* m_type;
+    QComboBox* m_folder;
+    QCheckBox* m_scale9;
     int m_reg = 4;
 };
 

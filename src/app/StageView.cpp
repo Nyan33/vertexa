@@ -85,6 +85,17 @@ StageView::StageView(Editor* editor, QWidget* parent) : QWidget(parent), m_ed(ed
     connect(m_ed, &Editor::frameChanged, this, &StageView::invalidate);
     connect(m_ed, &Editor::contextChanged, this, &StageView::invalidate);
     connect(m_ed, &Editor::onionChanged, this, &StageView::invalidate);
+    connect(m_ed, &Editor::simpleButtonsChanged, this, [this](bool on) {
+        if (!on) {
+            m_hotButton = nullptr;
+            m_buttonDown = false;
+        }
+        invalidate();
+        refreshCursor();
+    });
+    // Element identities change with the document: forget the hot button.
+    connect(m_ed, &Editor::documentChanged, this, [this]() { m_hotButton = nullptr; });
+    connect(m_ed, &Editor::contextChanged, this, [this]() { m_hotButton = nullptr; });
     connect(m_ed, &Editor::selectionChanged, this, qOverload<>(&StageView::update));
     connect(m_ed, &Editor::settingsChanged, this, qOverload<>(&StageView::update));
     connect(m_ed, &Editor::layerChanged, this, qOverload<>(&StageView::update));
@@ -174,6 +185,7 @@ void StageView::refreshCursor()
 {
     if (m_panning) setCursor(Qt::ClosedHandCursor);
     else if (m_spaceDown) setCursor(Qt::OpenHandCursor);
+    else if (m_hotButton) setCursor(Qt::PointingHandCursor);
     else if (Tool* t = strokeTool()) setCursor(t->cursor());
 }
 
@@ -289,6 +301,8 @@ void StageView::renderCache()
 
     RenderOptions o;
     o.clipFrame = m_ed->isPlaying() ? m_ed->frame() : 0;
+    o.hotButton = m_hotButton;
+    o.hotState = m_buttonDown ? ButtonState::Down : ButtonState::Over;
     Renderer(d, o).render(m_cache, tl, m_ed->frame(), ctx);
     m_cache.setDevicePixelRatio(dpr);
     m_cacheValid = true;
@@ -307,8 +321,8 @@ void StageView::drawSelection(QPainter& p)
     for (const ElementRef& r : m_ed->selection()) {
         const Layer* l = tl.layerById(r.layerId);
         const Keyframe* k = l ? l->keyAt(m_ed->frame()) : nullptr;
-        if (!k || r.index < 0 || r.index >= int(k->elements.size())) continue;
-        const ElementPtr& e = k->elements[r.index];
+        const ElementPtr e = m_ed->shownElement(r);
+        if (!k || !e) continue;
         if (const ShapeElement* s = asShape(e); s && !s->isObject) {
             const QPainterPath fills = qt.map(toQPath(s->graph->fillRegion(0)));
             QBrush hatch(ui::withAlpha(pal.selection, 200), Qt::Dense6Pattern);
@@ -417,6 +431,7 @@ void StageView::paintEvent(QPaintEvent*)
         p.drawLine(reg + QPointF(-7, 0), reg + QPointF(7, 0));
         p.drawLine(reg + QPointF(0, -7), reg + QPointF(0, 7));
     }
+    drawSliceGuides(p);
     drawSelection(p);
     if (m_active) m_active->paint(p);
     if (m_strokeTool && m_strokeTool != m_active) m_strokeTool->paint(p);
@@ -459,7 +474,77 @@ void StageView::mousePressEvent(QMouseEvent* ev)
     ToolEvent te = makeEvent(ev->position(), ev->modifiers());
     te.button = ev->button();
     te.buttons = ev->buttons();
+    if (const int guide = guideAt(te.pos); guide >= 0) {
+        m_guideDrag = guide;
+        m_guideGrid = *sliceSymbol()->scale9;
+        update();
+        return;
+    }
+    if (updateHotButton(te.pos)) {
+        // An enabled button takes the click instead of the tool.
+        m_buttonDown = true;
+        invalidate();
+        return;
+    }
     if (Tool* t = strokeTool()) t->press(te);
+}
+
+const Symbol* StageView::sliceSymbol() const
+{
+    if (!m_ed->inSymbol()) return nullptr;
+    const Symbol* s = m_ed->doc().symbol(m_ed->contextStack().back().symbolId);
+    return s && s->scale9 ? s : nullptr;
+}
+
+int StageView::guideAt(Vec2 pos) const
+{
+    const Symbol* s = sliceSymbol();
+    const ToolId t = m_ed->tool();
+    if (!s || (t != ToolId::Selection && t != ToolId::Subselection && t != ToolId::FreeTransform)) return -1;
+    const Rect& g = *s->scale9;
+    const double tol = 4.0 * unitsPerPixel();
+    const double d[4] = {std::abs(pos.x - g.x0), std::abs(pos.x - g.x1), std::abs(pos.y - g.y0), std::abs(pos.y - g.y1)};
+    int best = -1;
+    for (int i = 0; i < 4; ++i)
+        if (d[i] <= tol && (best < 0 || d[i] < d[best])) best = i;
+    return best;
+}
+
+void StageView::drawSliceGuides(QPainter& p)
+{
+    const Symbol* s = sliceSymbol();
+    if (!s) return;
+    const Rect g = m_guideDrag >= 0 ? m_guideGrid : *s->scale9;
+    const Affine T = timelineToWidget();
+    const double far = 1e5;
+    const ui::Palette& pal = ui::Theme::p();
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing);
+    const QLineF lines[4] = {{toQPoint(T.map({g.x0, -far})), toQPoint(T.map({g.x0, far}))},
+                             {toQPoint(T.map({g.x1, -far})), toQPoint(T.map({g.x1, far}))},
+                             {toQPoint(T.map({-far, g.y0})), toQPoint(T.map({far, g.y0}))},
+                             {toQPoint(T.map({-far, g.y1})), toQPoint(T.map({far, g.y1}))}};
+    for (int i = 0; i < 4; ++i) {
+        const bool hot = i == m_guideDrag || (m_guideDrag < 0 && i == m_guideHover);
+        p.setPen(QPen(hot ? pal.accent : pal.selection, hot ? 1.6 : 1.0, Qt::DashLine));
+        p.drawLine(lines[i]);
+    }
+    p.restore();
+}
+
+bool StageView::updateHotButton(Vec2 pos)
+{
+    const Element* hot = nullptr;
+    const Tool* t = m_active;
+    if (m_ed->simpleButtons() && !m_panning && !(t && t->busy()))
+        hot = buttonAt(m_ed->doc(), m_ed->timeline(), m_ed->frame(), pos, 2.0 * unitsPerPixel(), m_ed->isPlaying() ? m_ed->frame() : 0);
+    if (hot != m_hotButton) {
+        m_hotButton = hot;
+        if (!hot) m_buttonDown = false;
+        invalidate();
+        refreshCursor();
+    }
+    return hot != nullptr;
 }
 
 void StageView::mouseMoveEvent(QMouseEvent* ev)
@@ -475,6 +560,32 @@ void StageView::mouseMoveEvent(QMouseEvent* ev)
     ToolEvent te = makeEvent(ev->position(), ev->modifiers());
     te.buttons = ev->buttons();
     emit pointerMoved(te.pos.x, te.pos.y);
+    if (m_guideDrag >= 0) {
+        // Keep the guides in order with a sliver between them.
+        const double gap = unitsPerPixel();
+        Rect& g = m_guideGrid;
+        switch (m_guideDrag) {
+        case 0: g.x0 = std::min(te.pos.x, g.x1 - gap); break;
+        case 1: g.x1 = std::max(te.pos.x, g.x0 + gap); break;
+        case 2: g.y0 = std::min(te.pos.y, g.y1 - gap); break;
+        case 3: g.y1 = std::max(te.pos.y, g.y0 + gap); break;
+        }
+        update();
+        return;
+    }
+    if (const int hover = (ev->buttons() & Qt::LeftButton) ? -1 : guideAt(te.pos); hover != m_guideHover) {
+        m_guideHover = hover;
+        update();
+    }
+    if (m_guideHover >= 0) {
+        setCursor(m_guideHover < 2 ? Qt::SplitHCursor : Qt::SplitVCursor);
+        if (Tool* t = strokeTool()) t->hover(te);
+        return;
+    }
+    if (updateHotButton(te.pos) || m_buttonDown) {
+        refreshCursor();
+        return;
+    }
     if (Tool* t = strokeTool()) {
         if (ev->buttons() & Qt::LeftButton) t->move(te);
         else t->hover(te);
@@ -492,6 +603,17 @@ void StageView::mouseReleaseEvent(QMouseEvent* ev)
     if (m_tabletDown || ev->button() != Qt::LeftButton) return;
     ToolEvent te = makeEvent(ev->position(), ev->modifiers());
     te.button = ev->button();
+    if (m_guideDrag >= 0) {
+        m_guideDrag = -1;
+        if (m_ed->inSymbol()) m_ed->setSymbolScale9(m_ed->contextStack().back().symbolId, m_guideGrid);
+        update();
+        return;
+    }
+    if (m_buttonDown) {
+        m_buttonDown = false;
+        invalidate();
+        return;
+    }
     if (Tool* t = strokeTool()) t->release(te);
 }
 
@@ -619,6 +741,10 @@ void StageView::keyReleaseEvent(QKeyEvent* ev)
 void StageView::leaveEvent(QEvent*)
 {
     m_hasPointer = false;
+    if (m_hotButton && !m_buttonDown) {
+        m_hotButton = nullptr;
+        invalidate();
+    }
     update();
 }
 

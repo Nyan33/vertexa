@@ -14,15 +14,33 @@ struct EvalItem {
     /// Frames elapsed since the element's keyframe started (drives graphic
     /// symbol playback).
     int localFrame = 0;
+    /// The keyframe element this item shows: the same pointer on every
+    /// evaluation, also for tweened copies (null for shape tween morphs).
+    const Element* source = nullptr;
 };
 
 /// Elements visible on a layer at `frame` (bottom to top).
 std::vector<EvalItem> evaluateLayer(const Document& doc, const Timeline& tl, int layerIndex, int frame);
 
+/// Button states and the matching frames of a button symbol (Up, Over,
+/// Down; the fourth frame, Hit, is never shown).
+enum class ButtonState { Up = 0, Over = 1, Down = 2 };
+
 /// Frame of the symbol timeline displayed by an instance. Graphic symbols
-/// follow their loop options; movie clips and buttons show `clipFrame`
-/// (0 while authoring, the global playback frame when previewing).
-int instanceSymbolFrame(const Document& doc, const InstanceElement& inst, int localFrame, int clipFrame = 0);
+/// follow their loop options; movie clips show `clipFrame` (0 while
+/// authoring, the global playback frame when previewing); buttons show the
+/// frame of `button`.
+int instanceSymbolFrame(const Document& doc, const InstanceElement& inst, int localFrame, int clipFrame = 0,
+                        ButtonState button = ButtonState::Up);
+
+/// Frame of a button symbol that defines where it can be clicked: Hit when
+/// it has content, otherwise Up.
+int buttonHitFrame(const Document& doc, const Symbol& s);
+
+/// Topmost instance with button behaviour whose hit area contains `p`
+/// (timeline space), searched through nested symbols. Returns its
+/// `EvalItem::source`, or null.
+const Element* buttonAt(const Document& doc, const Timeline& tl, int frame, Vec2 p, double tol, int clipFrame = 0);
 
 /// Stroke chains of a guide layer at a frame, in layer coordinates.
 std::vector<std::vector<Cubic>> guideChains(const Timeline& tl, int guideLayerIndex, int frame);

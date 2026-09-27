@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/Evaluate.h"
+#include "core/Scale9.h"
 
 #include <QColor>
 #include <QImage>
@@ -28,6 +29,10 @@ struct RenderOptions {
     /// instance through nested timelines. The instance itself is not drawn
     /// (the editor draws its timeline at full opacity on top).
     std::vector<std::pair<uint32_t, int>> focusPath;
+    /// Button under the pointer (EvalItem::source) and its state; every
+    /// other button shows Up.
+    const Element* hotButton = nullptr;
+    ButtonState hotState = ButtonState::Over;
 };
 
 class Renderer {
@@ -61,6 +66,12 @@ private:
         bool outline = false;
         QColor outlineColor;
         QRect clip;
+        /// 9-slice scaling of the enclosing instance: shapes are sliced in
+        /// symbol space (`toSymbol` maps the current element's parent there)
+        /// and drawn with the instance's matrix `sliceBase`.
+        const Slice9* slice = nullptr;
+        Affine sliceBase;
+        Affine toSymbol;
     };
     void renderTimeline(QImage& target, const Timeline& tl, int frame, const Ctx& c);
     void renderLayerItems(QImage& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c);

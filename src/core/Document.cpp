@@ -62,6 +62,21 @@ std::string Document::newSymbolId()
     return id;
 }
 
+std::vector<std::string> Document::allLibraryFolders() const
+{
+    std::set<std::string> out;
+    auto add = [&](std::string path) {
+        while (!path.empty()) {
+            out.insert(path);
+            const size_t slash = path.rfind('/');
+            path = slash == std::string::npos ? std::string() : path.substr(0, slash);
+        }
+    };
+    for (const std::string& f : libraryFolders) add(f);
+    for (const Symbol& s : symbols) add(s.folder);
+    return {out.begin(), out.end()};
+}
+
 std::string Document::uniqueSymbolName(const std::string& base) const
 {
     if (!symbolByName(base)) return base;

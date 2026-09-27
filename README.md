@@ -48,14 +48,24 @@ outline toggles, keyframes, blank keyframes, spans, labels, onion skin, drag to
 move frames and layers, and the familiar keys: `F5`, `Shift+F5`, `F6`,
 `Shift+F6`, `F7`, `Enter`, `,` `.`, `Ctrl+Alt+C/X/V`… ([all shortcuts](docs/HOTKEYS.md)).
 
-**Symbols.** Movie clips and graphics in a library (button symbols can be
-created; their Up/Over/Down/Hit states are next on the roadmap), `F8` Convert to
-Symbol with a registration grid, edit in place (double-click, breadcrumbs),
-Break Apart (`Ctrl+B`), groups, swap symbol, instance names, colour effects
-(Brightness, Tint, Alpha, Advanced), graphic looping (Loop, Play Once, Single
-Frame, reverse modes, first/last frame). As in Animate, each instance has its
-own behaviour, so a movie clip can be placed as a graphic and the other way
-round.
+**Symbols.**
+- Movie clips, graphics and buttons in a library with **folders** (drag
+  symbols between folders, rename, nest, delete while keeping the contents).
+- `F8` Convert to Symbol with a registration grid, folder and 9-slice
+  option; edit in place (double-click, breadcrumbs); Break Apart (`Ctrl+B`);
+  groups; swap symbol; instance names and visibility.
+- Colour effects (Brightness, Tint, Alpha, Advanced) and graphic looping (Loop,
+  Play Once, Single Frame, reverse modes, first/last frame).
+- As in Animate, each instance has its own behaviour, so a movie clip can be
+  placed as a graphic and the other way round.
+- **Buttons** have Up / Over / Down / Hit frames (labelled in the timeline).
+  **Enable Simple Buttons** (`Ctrl+Alt+B`) makes them react to the pointer on
+  the stage, with the Hit frame as the clickable area.
+- **9-slice scaling**: drag the four guides while editing the symbol; scaled
+  instances keep their corners, and curves are split exactly at the guides.
+- On the in-between frames of a classic tween the selection sits on the
+  tweened instance. Moving or editing it there inserts a keyframe with the
+  tweened state first.
 
 **Animation.**
 - **Classic tweens** with Animate's matrix decomposition, rotation (Auto, CW,
@@ -110,7 +120,8 @@ come across. A report lists anything that could not be imported exactly
 
 <p align="center">
   <img src="docs/images/instance.png" width="49%"/> <img src="docs/images/edit.png" width="49%"/>
-  <img src="docs/images/brushes.png" width="49%"/> <img src="docs/images/light.png" width="49%"/>
+  <img src="docs/images/brushes.png" width="49%"/> <img src="docs/images/filters.png" width="49%"/>
+  <img src="docs/images/library.png" width="49%"/> <img src="docs/images/light.png" width="49%"/>
 </p>
 
 ## Building

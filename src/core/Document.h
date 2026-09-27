@@ -8,6 +8,7 @@
 #include "VectorBrush.h"
 
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,8 @@ struct Symbol {
     std::string folder;   ///< library folder path ("" = root)
     SymbolType type = SymbolType::MovieClip;
     Timeline timeline;
+    /// 9-slice scaling grid in symbol space (the four guides), if enabled.
+    std::optional<Rect> scale9;
 };
 
 struct Document {
@@ -31,6 +34,9 @@ struct Document {
     std::vector<Symbol> symbols;
     /// Brushes made from artwork in this document (Paint Brush tool).
     std::vector<VectorBrushPreset> brushes;
+    /// Library folders created by the user ("a/b" paths); folders that hold
+    /// symbols exist implicitly.
+    std::vector<std::string> libraryFolders;
 
     uint32_t nextLayerId = 1;
     uint64_t nextSymbolSerial = 1;
@@ -48,6 +54,10 @@ struct Document {
     uint32_t newLayerId() { return nextLayerId++; }
     Layer makeLayer(const std::string& name);
     std::string uniqueLayerName(const Timeline& tl) const;
+
+    /// Every library folder path (explicit, holding symbols, and their
+    /// parents), sorted.
+    std::vector<std::string> allLibraryFolders() const;
 
     /// Number of instances of a symbol anywhere in the document.
     int useCount(const std::string& symbolId) const;

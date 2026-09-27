@@ -15,6 +15,7 @@ add_library(vx_core STATIC
     Evaluate.h Evaluate.cpp
     TimelineOps.h TimelineOps.cpp
     DocumentOps.h DocumentOps.cpp
+    Scale9.h Scale9.cpp
     Serialize.h Serialize.cpp
     io/Cfb.h io/Cfb.cpp
     io/FlaCommon.h

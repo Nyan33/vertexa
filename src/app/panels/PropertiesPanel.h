@@ -33,6 +33,7 @@ private:
     void buildFrame();
     void buildLayer();
     void buildDocument();
+    void buildSymbol();
 
     Editor* m_ed;
     QWidget* m_content = nullptr;
