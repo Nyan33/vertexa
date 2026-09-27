@@ -47,7 +47,7 @@ int main(int argc, char** argv)
     QCommandLineOption demo("demo", "Open the demo scene.");
     QCommandLineOption screenshot("screenshot", "Save a screenshot of the window to <file> and quit.", "file");
     QCommandLineOption frameOpt("frame", "Frame to show (with --screenshot).", "n", "1");
-    QCommandLineOption stateOpt("state", "UI state for --screenshot: instance, edit, brushes, light, library.", "name");
+    QCommandLineOption stateOpt("state", "UI state for --screenshot: instance, edit, brushes, light, library, filters.", "name");
     parser.addOption(stateOpt);
     parser.addOption(demo);
     parser.addOption(screenshot);
@@ -92,7 +92,13 @@ int main(int argc, char** argv)
                     }
                 return -1;
             };
-            if (state == "instance") {
+            if (state == "filters") {
+                selectLayerElement("Ball");
+                editor.setTool(vx::app::ToolId::Selection);
+                raise("properties");
+                for (const char* dock : {"color", "brushes"})
+                    if (auto* d = window.findChild<QDockWidget*>(dock)) d->hide();
+            } else if (state == "instance") {
                 selectLayerElement("Sun");
                 editor.setTool(vx::app::ToolId::FreeTransform);
             } else if (state == "edit") {

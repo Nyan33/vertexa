@@ -122,13 +122,30 @@ Document createDemoDocument()
         Layer ball = d.makeLayer("Ball");
         ball.parentId = guide.id;
         ball.keys[0].duration = frames - 1;
-        ball.keys[0].elements.push_back(ballInst->withMatrix(Affine::translate(120, 560)));
+        // Soft glow and a drop shadow that lengthens along the flight (filters tween).
+        Filter glow = Filter::defaults(FilterType::Glow);
+        glow.color = Color(0x8B, 0x6C, 0xFF, 150);
+        glow.blurX = glow.blurY = 22;
+        glow.quality = 2;
+        Filter shadow = Filter::defaults(FilterType::DropShadow);
+        shadow.color = Color(0x1B, 0x1A, 0x22, 120);
+        shadow.blurX = shadow.blurY = 10;
+        shadow.distance = 6;
+        shadow.quality = 2;
+        auto flying = [&](const Affine& m, double distance) {
+            auto b = ballInst->cloneAs<InstanceElement>();
+            b->matrix = m;
+            shadow.distance = distance;
+            b->filters = {glow, shadow};
+            return b;
+        };
+        ball.keys[0].elements.push_back(flying(Affine::translate(120, 560), 6));
         ball.keys[0].tween = TweenType::Classic;
         ball.keys[0].classic.ease.kind = EaseKind::SineInOut;
         ball.keys[0].classic.orientToPath = true;
         Keyframe end;
         end.duration = 1;
-        end.elements.push_back(ballInst->withMatrix(Affine::translate(660, 520)));
+        end.elements.push_back(flying(Affine::translate(660, 520), 22));
         ball.keys.push_back(end);
         ball.normalize();
         tl.layers.push_back(guide);

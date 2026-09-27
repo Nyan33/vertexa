@@ -98,6 +98,7 @@ std::vector<EvalItem> evaluateLayer(const Document& doc, const Timeline& tl, int
                 const auto& ia = static_cast<const InstanceElement&>(*a);
                 const auto& ib = static_cast<const InstanceElement&>(*b);
                 ci->color = ColorEffect::lerp(ia.color, ib.color, t);
+                ci->filters = lerpFilters(ia.filters, ib.filters, t);
             }
             out.push_back({c, local});
         }

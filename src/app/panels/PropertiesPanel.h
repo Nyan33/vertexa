@@ -8,6 +8,8 @@
 
 #include <QScrollArea>
 
+#include <functional>
+
 class QGridLayout;
 class QVBoxLayout;
 
@@ -26,6 +28,8 @@ private:
     void buildToolOptions();
     void buildFillStroke(bool applyToSelection);
     void buildSelection();
+    void buildFilters(const InstanceElement& in,
+                      const std::function<void(std::function<void(InstanceElement&)>)>& previewFx);
     void buildFrame();
     void buildLayer();
     void buildDocument();

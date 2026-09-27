@@ -142,6 +142,52 @@ public:
                     .arg(matrixAttr(m), num(b.x0), num(b.y0), num(w / scale), num(h / scale), QString::fromLatin1(png.toBase64()));
     }
 
+    /// SVG equivalent of Animate filters (outer shadows and glows, blur, adjust
+    /// colour); returns the filter id or an empty string.
+    QString svgFilter(const FilterList& filters)
+    {
+        QString prims;
+        QString in = QStringLiteral("SourceGraphic");
+        int n = 0;
+        auto sigma = [](const Filter& f, double blur) { return std::sqrt(std::max(1, f.quality) * std::max(0.0, blur * blur - 1) / 12.0); };
+        for (const Filter& f : filters) {
+            if (!f.enabled) continue;
+            const QString out = QString("r%1").arg(++n);
+            switch (f.type) {
+            case FilterType::Blur:
+                prims += QString("<feGaussianBlur in=\"%1\" stdDeviation=\"%2 %3\" result=\"%4\"/>")
+                             .arg(in, num(sigma(f, f.blurX)), num(sigma(f, f.blurY)), out);
+                break;
+            case FilterType::DropShadow:
+            case FilterType::Glow: {
+                if (f.inner || f.knockout || f.hideObject) continue;
+                const double a = f.angle * kPi / 180.0;
+                const double d = f.type == FilterType::Glow ? 0.0 : f.distance;
+                prims += QString("<feDropShadow in=\"%1\" dx=\"%2\" dy=\"%3\" stdDeviation=\"%4 %5\" flood-color=\"#%6\" "
+                                 "flood-opacity=\"%7\" result=\"%8\"/>")
+                             .arg(in, num(std::cos(a) * d), num(std::sin(a) * d), num(sigma(f, f.blurX)), num(sigma(f, f.blurY)),
+                                  QString::asprintf("%02X%02X%02X", f.color.r, f.color.g, f.color.b),
+                                  num(std::min(1.0, f.color.a / 255.0 * f.strength)), out);
+                break;
+            }
+            case FilterType::AdjustColor: {
+                const auto mat = adjustColorMatrix(f);
+                QStringList values;
+                for (int i = 0; i < 20; ++i) values << num(i % 5 == 4 ? mat[i] / 255.0 : mat[i]);
+                prims += QString("<feColorMatrix in=\"%1\" type=\"matrix\" values=\"%2\" result=\"%3\"/>")
+                             .arg(in, values.join(' '), out);
+                break;
+            }
+            default: continue;
+            }
+            in = out;
+        }
+        if (prims.isEmpty()) return {};
+        const QString id = QString("f%1").arg(++m_ids);
+        defs += QString("<filter id=\"%1\" x=\"-50%\" y=\"-50%\" width=\"200%\" height=\"200%\">%2</filter>").arg(id, prims);
+        return id;
+    }
+
     void element(const EvalItem& it, const Affine& parent, const ColorTransform& ct, int depth)
     {
         const Element& e = *it.element;
@@ -162,8 +208,11 @@ public:
             const Symbol* s = m_doc.symbol(in.symbolId);
             if (!s || !in.visible || depth > 32) return;
             const QString blend = s->type != SymbolType::Graphic ? cssBlend(in.blend) : QString();
+            const QString filter = s->type != SymbolType::Graphic ? svgFilter(in.filters) : QString();
             if (!blend.isEmpty()) body += QString("<g style=\"mix-blend-mode:%1\">").arg(blend);
+            if (!filter.isEmpty()) body += QString("<g filter=\"url(#%1)\">").arg(filter);
             timeline(s->timeline, instanceSymbolFrame(m_doc, in, it.localFrame), m, ct * in.color.toTransform(), depth + 1);
+            if (!filter.isEmpty()) body += "</g>";
             if (!blend.isEmpty()) body += "</g>";
             break;
         }

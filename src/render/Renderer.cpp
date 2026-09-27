@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Renderer.h"
 #include "Blend.h"
+#include "Filters.h"
 #include "DabEngine.h"
 #include "QtConvert.h"
 #include "Raster.h"
@@ -292,11 +293,36 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
         ic.ct = c.ct * in.color.toTransform();
         ic.depth = c.depth + 1;
         const bool blends = in.blend != BlendMode::Normal && sym->type != SymbolType::Graphic && !c.outline;
-        if (!blends) {
+        const bool filtered = sym->type != SymbolType::Graphic && !c.outline && hasActiveFilters(in.filters);
+        if (!blends && !filtered) {
             renderTimeline(target, sym->timeline, frame, ic);
             return;
         }
         if ((in.blend == BlendMode::Alpha || in.blend == BlendMode::Erase) && !c.isolated) return;
+        if (filtered) {
+            // Filters work in device pixels on the instance's own buffer; like
+            // Animate, they scale with the view and enclosing symbols.
+            const double scale = std::sqrt(std::abs(c.m.det()));
+            const Rect local = timelineBounds(m_doc, sym->timeline, frame, c.depth + 1);
+            if (local.isEmpty()) return;
+            const int margin = int(std::ceil(filterMargin(in.filters) * scale));
+            const QRect clip = c.clip.isNull() ? target.rect() : c.clip;
+            const QRect area = deviceRect(m.mapRect(local)).adjusted(-margin, -margin, margin, margin) &
+                               clip.adjusted(-margin, -margin, margin, margin);
+            if (area.isEmpty() || double(area.width()) * area.height() > 64e6) return;
+            QImage buf(area.size(), QImage::Format_ARGB32_Premultiplied);
+            buf.fill(0);
+            Ctx fc = ic;
+            fc.m = Affine::translate(-area.x(), -area.y()) * m;
+            fc.ct = ColorTransform{};
+            fc.isolated = true;
+            fc.clip = buf.rect();
+            renderTimeline(buf, sym->timeline, frame, fc);
+            applyFilters(buf, in.filters, scale);
+            applyColorTransform(buf, ic.ct);
+            compositeImage(target, buf, area.topLeft(), blends ? in.blend : BlendMode::Normal, 1.0);
+            return;
+        }
         QImage buf(target.size(), QImage::Format_ARGB32_Premultiplied);
         buf.fill(0);
         ic.isolated = true;

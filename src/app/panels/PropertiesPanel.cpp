@@ -13,7 +13,9 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
+#include <QToolButton>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -56,7 +58,7 @@ QCheckBox* check(QWidget* parent, const QString& text, bool on, std::function<vo
     return c;
 }
 
-QWidget* hbox(QWidget* parent, std::initializer_list<QWidget*> ws)
+QWidget* hbox(QWidget* parent, const QList<QWidget*>& ws)
 {
     auto* w = new QWidget(parent);
     auto* l = new QHBoxLayout(w);
@@ -587,6 +589,7 @@ void PropertiesPanel::buildSelection()
         }
         auto* edit = new QPushButton(tr("Edit Symbol"), m_content);
         edit->setProperty("accent", true);
+        if (sym && sym->type != SymbolType::Graphic) buildFilters(*in, previewFx);
         connect(edit, &QPushButton::clicked, this, [this]() {
             const ElementRef r = m_ed->selection().front();
             const int li = m_ed->timeline().layerIndex(r.layerId);
@@ -599,6 +602,118 @@ void PropertiesPanel::buildSelection()
     for (const ElementPtr& e : els)
         if (e->type() == ElementType::Shape) hasShape = true;
     if (hasShape) buildFillStroke(true);
+}
+
+void PropertiesPanel::buildFilters(const InstanceElement& in, const std::function<void(std::function<void(InstanceElement&)>)>& previewFx)
+{
+    QGridLayout* fg = section(tr("Filters"), in.filters.empty() ? tr("none") : tr("%1").arg(in.filters.size()));
+    auto* add = new QToolButton(m_content);
+    add->setText(tr("+ Add filter"));
+    add->setPopupMode(QToolButton::InstantPopup);
+    auto* menu = new QMenu(add);
+    for (int t = 0; t < int(FilterType::Count); ++t) {
+        const FilterType type = FilterType(t);
+        menu->addAction(QString::fromUtf8(filterLabel(type).data()), this, [this, type]() {
+            m_ed->setInstanceProperty([type](InstanceElement& x) { x.filters.push_back(Filter::defaults(type)); }, tr("Add Filter"));
+        });
+    }
+    add->setMenu(menu);
+    row(fg, {}, add);
+
+    for (int i = 0; i < int(in.filters.size()); ++i) {
+        const Filter& f = in.filters[i];
+        auto commit = [this, i](std::function<void(Filter&)> fn, const QString& label) {
+            m_ed->setInstanceProperty([i, fn](InstanceElement& x) {
+                if (i < int(x.filters.size())) fn(x.filters[i]);
+            }, label);
+        };
+        auto preview = [previewFx, i](std::function<void(Filter&)> fn) {
+            previewFx([i, fn](InstanceElement& x) {
+                if (i < int(x.filters.size())) fn(x.filters[i]);
+            });
+        };
+        auto num = [&](double value, double lo, double hi, int decimals, double step, const QString& suffix,
+                       std::function<void(Filter&, double)> set, const QString& label) {
+            return number(m_content, value, lo, hi, decimals, step, suffix,
+                          [commit, set, label](double v) { commit([set, v](Filter& x) { set(x, v); }, label); },
+                          [preview, set](double v) { preview([set, v](Filter& x) { set(x, v); }); });
+        };
+        auto swatch = [&](const Color& c, std::function<void(Filter&, Color)> set) {
+            auto* sw = new ColorSwatch(m_content);
+            sw->setFill(FillStyle::solid(c));
+            connect(sw, &ColorSwatch::clicked, this, [this, sw, c, set, commit]() {
+                popupColorPicker(sw, toQColor(c), [sw, set, commit](const QColor& q, bool final) {
+                    sw->setFill(FillStyle::solid(fromQColor(q)));
+                    if (final) commit([set, q](Filter& x) { set(x, fromQColor(q)); }, QObject::tr("Filter Color"));
+                });
+            });
+            return sw;
+        };
+
+        // Header: enable, name, remove.
+        auto* remove = new QToolButton(m_content);
+        remove->setIcon(ui::icon("trash"));
+        remove->setToolTip(tr("Remove filter"));
+        connect(remove, &QToolButton::clicked, this, [this, i]() {
+            m_ed->setInstanceProperty([i](InstanceElement& x) {
+                if (i < int(x.filters.size())) x.filters.erase(x.filters.begin() + i);
+            }, tr("Remove Filter"));
+        });
+        row(fg, {}, hbox(m_content, {check(m_content, QString::fromUtf8(filterLabel(f.type).data()), f.enabled,
+                                           [commit](bool b) { commit([b](Filter& x) { x.enabled = b; }, QObject::tr("Enable Filter")); }),
+                                     remove}));
+
+        if (f.type == FilterType::AdjustColor) {
+            row(fg, tr("Brightness"), num(f.brightness, -100, 100, 0, 1, {}, [](Filter& x, double v) { x.brightness = v; }, tr("Brightness")));
+            row(fg, tr("Contrast"), num(f.contrast, -100, 100, 0, 1, {}, [](Filter& x, double v) { x.contrast = v; }, tr("Contrast")));
+            row(fg, tr("Saturation"), num(f.saturation, -100, 100, 0, 1, {}, [](Filter& x, double v) { x.saturation = v; }, tr("Saturation")));
+            row(fg, tr("Hue"), num(f.hue, -180, 180, 0, 1, QStringLiteral("°"), [](Filter& x, double v) { x.hue = v; }, tr("Hue")));
+            continue;
+        }
+        row(fg, tr("Blur X / Y"),
+            hbox(m_content, {num(f.blurX, 0, 255, 1, 0.5, QStringLiteral(" px"), [](Filter& x, double v) { x.blurX = v; }, tr("Blur")),
+                             num(f.blurY, 0, 255, 1, 0.5, QStringLiteral(" px"), [](Filter& x, double v) { x.blurY = v; }, tr("Blur"))}));
+        row(fg, tr("Quality"), combo(m_content, {tr("Low"), tr("Medium"), tr("High")}, std::clamp(f.quality, 1, 3) - 1,
+                                     [commit](int q) { commit([q](Filter& x) { x.quality = q + 1; }, QObject::tr("Filter Quality")); }));
+        if (f.type == FilterType::Blur) continue;
+        row(fg, tr("Strength"), num(f.strength * 100, 0, 25500, 0, 5, QStringLiteral("%"), [](Filter& x, double v) { x.strength = v / 100.0; }, tr("Strength")));
+        const bool angled = f.type == FilterType::DropShadow || f.type == FilterType::Bevel ||
+                            f.type == FilterType::GradientBevel || f.type == FilterType::GradientGlow;
+        if (angled) {
+            row(fg, tr("Angle / Distance"),
+                hbox(m_content, {num(f.angle, -360, 360, 0, 1, QStringLiteral("°"), [](Filter& x, double v) { x.angle = v; }, tr("Angle")),
+                                 num(f.distance, -255, 255, 1, 0.5, QStringLiteral(" px"), [](Filter& x, double v) { x.distance = v; }, tr("Distance"))}));
+        }
+        if (f.type == FilterType::Bevel) {
+            row(fg, tr("Shadow / Highlight"),
+                hbox(m_content, {swatch(f.color, [](Filter& x, Color c) { x.color = c; }),
+                                 swatch(f.highlight, [](Filter& x, Color c) { x.highlight = c; })}));
+        } else if (f.type == FilterType::GradientGlow || f.type == FilterType::GradientBevel) {
+            if (!f.gradient.stops.empty()) {
+                const int last = int(f.gradient.stops.size()) - 1;
+                row(fg, tr("Gradient"),
+                    hbox(m_content, {swatch(f.gradient.stops.front().color, [](Filter& x, Color c) { x.gradient.stops.front().color = c; }),
+                                     swatch(f.gradient.stops[last].color, [last](Filter& x, Color c) {
+                                         if (last < int(x.gradient.stops.size())) x.gradient.stops[last].color = c;
+                                     })}));
+            }
+        } else {
+            row(fg, tr("Color"), swatch(f.color, [](Filter& x, Color c) { x.color = c; }));
+        }
+        if (f.type == FilterType::Bevel || f.type == FilterType::GradientBevel) {
+            row(fg, tr("Type"), combo(m_content, {tr("Inner"), tr("Outer"), tr("Full")}, int(f.bevel), [commit](int k) {
+                    commit([k](Filter& x) { x.bevel = BevelKind(k); }, QObject::tr("Bevel Type"));
+                }));
+        }
+        QList<QWidget*> flags{check(m_content, tr("Knockout"), f.knockout,
+                                    [commit](bool b) { commit([b](Filter& x) { x.knockout = b; }, QObject::tr("Knockout")); })};
+        if (f.type == FilterType::DropShadow || f.type == FilterType::Glow || f.type == FilterType::GradientGlow)
+            flags << check(m_content, tr("Inner"), f.inner, [commit](bool b) { commit([b](Filter& x) { x.inner = b; }, QObject::tr("Inner")); });
+        if (f.type == FilterType::DropShadow)
+            flags << check(m_content, tr("Hide object"), f.hideObject,
+                           [commit](bool b) { commit([b](Filter& x) { x.hideObject = b; }, QObject::tr("Hide Object")); });
+        row(fg, {}, hbox(m_content, flags));
+    }
 }
 
 void PropertiesPanel::buildFrame()

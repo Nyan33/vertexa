@@ -5,8 +5,10 @@
 #include "render/Blend.h"
 #include "render/BrushResources.h"
 #include "render/DabEngine.h"
+#include "render/Filters.h"
 #include "render/Raster.h"
 #include "render/Renderer.h"
+#include "render/SvgExport.h"
 
 #include <QGuiApplication>
 
@@ -96,6 +98,87 @@ VX_TEST(texture_brush_paints)
     QString name;
     const GrayImagePtr tip = BrushResources::loadGbr(gbr, &name);
     CHECK(tip && tip->width == 2 && tip->pixels[1] == 255 && name == "test");
+}
+
+VX_TEST(filters)
+{
+    // A white 20x20 square in the middle of a transparent 60x60 image.
+    auto square = [] {
+        QImage img = blank(60, 60);
+        ShapeGraph g = graphFromRegion(Region::rect({20, 20, 40, 40}), FillStyle::solid(Color(255, 255, 255)));
+        Renderer::renderShape(img, g.renderData(), Affine{}, {}, img.rect());
+        return img;
+    };
+    // Drop shadow at 45 degrees: below-right of the square, not above-left.
+    {
+        QImage img = square();
+        Filter f = Filter::defaults(FilterType::DropShadow);
+        f.blurX = f.blurY = 2;
+        f.distance = 8;
+        applyFilters(img, {f}, 1.0);
+        CHECK(qAlpha(img.pixel(44, 44)) > 150);
+        CHECK(qRed(img.pixel(44, 44)) < 30);       // black shadow
+        CHECK(qAlpha(img.pixel(16, 16)) == 0);
+        CHECK(img.pixel(30, 30) == qRgba(255, 255, 255, 255)); // object on top
+        // Scale doubles the distance (zoomed view).
+        QImage z = square();
+        applyFilters(z, {f}, 2.0);
+        CHECK(qAlpha(z.pixel(49, 49)) > 100);
+        CHECK(qAlpha(img.pixel(49, 49)) < 40);
+    }
+    // Glow spreads evenly; knockout removes the object.
+    {
+        QImage img = square();
+        Filter g = Filter::defaults(FilterType::Glow);
+        g.blurX = g.blurY = 8;
+        g.knockout = true;
+        applyFilters(img, {g}, 1.0);
+        CHECK(qAlpha(img.pixel(30, 30)) == 0);
+        CHECK(qAlpha(img.pixel(18, 30)) > 40 && qRed(img.pixel(18, 30)) > qGreen(img.pixel(18, 30)));
+        CHECK(std::abs(qAlpha(img.pixel(18, 30)) - qAlpha(img.pixel(41, 30))) <= 12);
+    }
+    // Blur softens the edge symmetrically and keeps total coverage.
+    {
+        QImage img = square();
+        Filter b = Filter::defaults(FilterType::Blur);
+        b.blurX = b.blurY = 6;
+        applyFilters(img, {b}, 1.0);
+        CHECK(qAlpha(img.pixel(19, 30)) > 20 && qAlpha(img.pixel(19, 30)) < 235);
+        long sum = 0;
+        for (int y = 0; y < 60; ++y)
+            for (int x = 0; x < 60; ++x) sum += qAlpha(img.pixel(x, y));
+        CHECK(std::abs(sum - 400L * 255) < 400L * 255 / 50);
+    }
+    // Adjust colour: a hue rotation turns red towards green / blue.
+    {
+        QImage img = blank(4, 4, qRgba(255, 0, 0, 255));
+        Filter a = Filter::defaults(FilterType::AdjustColor);
+        a.hue = 120;
+        applyFilters(img, {a}, 1.0);
+        CHECK(qRed(img.pixel(1, 1)) < qGreen(img.pixel(1, 1)));
+        a.hue = 0;
+        CHECK(!hasActiveFilters({a}));
+    }
+    // Inside a document: a movie clip with a glow renders outside its shape.
+    {
+        Document d = Document::createDefault();
+        auto inst = convertToSymbol(d, {makeShapeElement(graphFromRegion(Region::rect({0, 0, 20, 20}),
+                                                                           FillStyle::solid(Color(0, 0, 255))), false)},
+                                    "Box", SymbolType::MovieClip, {0, 0});
+        auto glowing = inst->cloneAs<InstanceElement>();
+        glowing->matrix = Affine::translate(100, 100);
+        Filter g = Filter::defaults(FilterType::Glow);
+        g.blurX = g.blurY = 10;
+        glowing->filters = {g};
+        d.scenes[0].layers[0].keys[0].elements = {glowing};
+        const QImage frame = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, true);
+        CHECK(qAlpha(frame.pixel(97, 110)) > 30);       // glow left of the box
+        CHECK(qRed(frame.pixel(97, 110)) > qBlue(frame.pixel(97, 110)));
+        CHECK(qBlue(frame.pixel(110, 110)) > 200);      // the box itself
+        CHECK(qAlpha(frame.pixel(60, 110)) == 0);
+        const QString svg = frameToSvg(d, d.scenes[0], 0);
+        CHECK(svg.contains("<feDropShadow") && svg.contains("filter=\"url(#f"));
+    }
 }
 
 VX_TEST(document_frame_render)
