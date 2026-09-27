@@ -127,7 +127,7 @@ int instanceSymbolFrame(const Document& doc, const InstanceElement& inst, int lo
     if (!s) return 0;
     const int len = s->timeline.frameCount();
     if (len <= 1) return 0;
-    if (s->type != SymbolType::Graphic) return ((clipFrame % len) + len) % len;
+    if (inst.behavior != SymbolType::Graphic) return ((clipFrame % len) + len) % len;
     const int first = std::clamp(inst.firstFrame, 0, len - 1);
     const int last = inst.lastFrame < 0 ? len - 1 : std::clamp(inst.lastFrame, first, len - 1);
     const int span = last - first + 1;
@@ -218,7 +218,7 @@ std::vector<ElementPtr> bakeFrame(const Document& doc, const Timeline& tl, int l
         // Graphic instances continue from where they were.
         if (const InstanceElement* in = asInstance(e)) {
             const Symbol* s = doc.symbol(in->symbolId);
-            if (s && s->type == SymbolType::Graphic && in->loop != LoopMode::SingleFrame && local > 0) {
+            if (s && in->behavior == SymbolType::Graphic && in->loop != LoopMode::SingleFrame && local > 0) {
                 auto c = in->cloneAs<InstanceElement>();
                 c->firstFrame = instanceSymbolFrame(doc, *in, local);
                 e = c;

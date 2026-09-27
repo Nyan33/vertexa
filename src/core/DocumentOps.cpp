@@ -139,6 +139,7 @@ std::shared_ptr<InstanceElement> convertToSymbol(Document& doc, const std::vecto
 
     auto inst = std::make_shared<InstanceElement>();
     inst->symbolId = doc.symbols.back().id;
+    inst->behavior = doc.symbols.back().type;
     inst->matrix = Affine::translate(registration);
     inst->pivot = bounds.isEmpty() ? Vec2{} : bounds.center() - registration;
     return inst;

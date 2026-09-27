@@ -1167,6 +1167,7 @@ void Editor::placeSymbol(const std::string& id, Vec2 pos)
         }
         auto inst = std::make_shared<InstanceElement>();
         inst->symbolId = id;
+        inst->behavior = s->type;
         inst->matrix = Affine::translate(pos);
         const Rect b = timelineBounds(d, s->timeline, 0);
         inst->pivot = b.isEmpty() ? Vec2{} : b.center();

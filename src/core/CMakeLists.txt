@@ -21,6 +21,7 @@ add_library(vx_core STATIC
     io/FlaImport.h io/FlaImport.cpp
     io/FlaBinary.cpp
     io/Xfl.cpp
+    io/Zip.h io/Zip.cpp
 )
 target_include_directories(vx_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(vx_core PUBLIC vx_geom Qt6::Core)

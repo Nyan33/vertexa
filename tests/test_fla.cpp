@@ -9,6 +9,7 @@
 #include "core/Serialize.h"
 #include "core/io/Cfb.h"
 #include "core/io/FlaImport.h"
+#include "core/io/Zip.h"
 
 #include <QDir>
 #include <QtEndian>
@@ -337,6 +338,196 @@ VX_TEST(filters_roundtrip)
     glow2.blurX = 20;
     const FilterList mid = lerpFilters({glow}, {glow2}, 0.5);
     CHECK_NEAR(mid[0].blurX, 16.0, 1e-9);
+}
+
+// --- XFL -------------------------------------------------------------------------------
+
+namespace {
+
+QByteArray rawDeflate(const QByteArray& data)
+{
+    const QByteArray z = qCompress(data, 9); // 4-byte size + zlib header + deflate + adler32
+    return z.mid(6, z.size() - 6 - 4);
+}
+
+QByteArray zipArchive(const std::vector<std::pair<QString, QByteArray>>& files)
+{
+    W out, dir;
+    for (const auto& [name, data] : files) {
+        const bool deflate = data.size() > 64;
+        const QByteArray body = deflate ? rawDeflate(data) : data;
+        const uint32_t offset = uint32_t(out.b.size());
+        const QByteArray n = name.toUtf8();
+        out.u32(0x04034b50).u16(20).u16(0x800).u16(deflate ? 8 : 0).u16(0).u16(0).u32(0);
+        out.u32(uint32_t(body.size())).u32(uint32_t(data.size())).u16(int(n.size())).u16(0);
+        out.b.append(n);
+        out.b.append(body);
+        dir.u32(0x02014b50).u16(20).u16(20).u16(0x800).u16(deflate ? 8 : 0).u16(0).u16(0).u32(0);
+        dir.u32(uint32_t(body.size())).u32(uint32_t(data.size())).u16(int(n.size())).u16(0).u16(0).u16(0).u16(0).u32(0);
+        dir.u32(offset);
+        dir.b.append(n);
+    }
+    const uint32_t dirOffset = uint32_t(out.b.size());
+    out.b.append(dir.b);
+    out.u32(0x06054b50).u16(0).u16(0).u16(int(files.size())).u16(int(files.size()));
+    out.u32(uint32_t(dir.b.size())).u32(dirOffset).u16(0);
+    return out.b;
+}
+
+const char* kDomDocument = R"(<DOMDocument xmlns="http://ns.adobe.com/xfl/2008/" width="640" height="480" frameRate="30"
+  backgroundColor="#102030" xflVersion="2.97">
+  <symbols><Include href="Ball.xml"/><Include href="Glow.xml"/></symbols>
+  <timelines><DOMTimeline name="Main">
+    <layers>
+      <DOMLayer name="Ball" color="#FF4FFF">
+        <frames>
+          <DOMFrame index="0" duration="10" tweenType="motion" motionTweenRotate="clockwise" motionTweenRotateTimes="2" acceleration="50">
+            <elements>
+              <DOMSymbolInstance libraryItemName="Props/Ball" symbolType="graphic" loop="single frame" firstFrame="2">
+                <matrix><Matrix tx="100" ty="50"/></matrix>
+                <transformationPoint><Point x="10" y="10"/></transformationPoint>
+                <color><Color alphaMultiplier="0.5"/></color>
+              </DOMSymbolInstance>
+            </elements>
+          </DOMFrame>
+          <DOMFrame index="12" duration="3" name="end">
+            <elements>
+              <DOMSymbolInstance libraryItemName="Glow" blendMode="add" name="glow1">
+                <matrix><Matrix a="2" d="2" tx="300" ty="50"/></matrix>
+                <filters>
+                  <BlurFilter blurX="138" blurY="138" quality="3"/>
+                  <DropShadowFilter color="#FF0000" alpha="0.5" distance="8" angle="90" inner="true"/>
+                  <AdjustColorFilter hue="30" saturation="-20"/>
+                </filters>
+              </DOMSymbolInstance>
+            </elements>
+          </DOMFrame>
+        </frames>
+      </DOMLayer>
+      <DOMLayer name="Back">
+        <frames>
+          <DOMFrame index="0" duration="15">
+            <elements>
+              <DOMShape>
+                <fills>
+                  <FillStyle index="1"><SolidColor color="#00FF00"/></FillStyle>
+                  <FillStyle index="2"><LinearGradient><matrix><Matrix a="0.05" d="0.05" tx="50" ty="50"/></matrix>
+                    <GradientEntry color="#FFFFFF" ratio="0"/><GradientEntry color="#000000" ratio="1"/></LinearGradient></FillStyle>
+                </fills>
+                <strokes><StrokeStyle index="1"><SolidStroke weight="2" caps="square"><fill><SolidColor color="#0000FF"/></fill></SolidStroke></StrokeStyle></strokes>
+                <edges>
+                  <Edge fillStyle1="1" strokeStyle="1" edges="!0 0|2000 0|2000 2000|0 2000|0 0"/>
+                  <Edge fillStyle1="2" edges="!#FA0 #FA0S2|#1388 #FA0|#1388.80 #1388|#FA0 #1388|#FA0 #FA0"/>
+                </edges>
+              </DOMShape>
+            </elements>
+          </DOMFrame>
+        </frames>
+      </DOMLayer>
+    </layers>
+  </DOMTimeline></timelines>
+</DOMDocument>)";
+
+const char* kBallItem = R"(<DOMSymbolItem xmlns="http://ns.adobe.com/xfl/2008/" name="Props/Ball" symbolType="graphic">
+  <timeline><DOMTimeline name="Ball"><layers><DOMLayer name="Layer 1"><frames>
+    <DOMFrame index="0" duration="4"><elements>
+      <DOMShape><fills><FillStyle index="1"><SolidColor color="#FF0000" alpha="0.75"/></FillStyle></fills>
+        <edges><Edge fillStyle1="1" edges="!0 0[400 -400 800 0|400 400|0 0"/></edges></DOMShape>
+    </elements></DOMFrame>
+  </frames></DOMLayer></layers></DOMTimeline></timeline>
+</DOMSymbolItem>)";
+
+const char* kGlowItem = R"(<DOMSymbolItem xmlns="http://ns.adobe.com/xfl/2008/" name="Glow">
+  <timeline><DOMTimeline name="Glow"><layers><DOMLayer name="Layer 1"><frames>
+    <DOMFrame index="0"><elements>
+      <DOMShape><fills><FillStyle index="1"><SolidColor color="#FFAA00"/></FillStyle></fills>
+        <edges><Edge fillStyle0="1" edges="!0 0|0 200|200 200|200 0|0 0"/></edges></DOMShape>
+    </elements></DOMFrame>
+  </frames></DOMLayer></layers></DOMTimeline></timeline>
+</DOMSymbolItem>)";
+
+QByteArray sampleXfl()
+{
+    return zipArchive({{QStringLiteral("mimetype"), QByteArray("application/vnd.adobe.xfl")},
+                       {QStringLiteral("DOMDocument.xml"), QByteArray(kDomDocument)},
+                       {QStringLiteral("LIBRARY/Ball.xml"), QByteArray(kBallItem)},
+                       {QStringLiteral("LIBRARY/Glow.xml"), QByteArray(kGlowItem)}});
+}
+
+} // namespace
+
+VX_TEST(inflate_and_zip)
+{
+    QByteArray text;
+    for (int i = 0; i < 2000; ++i) text += QByteArray::number(i * 7919 % 1000) + (i % 13 ? " " : "\n");
+    QByteArray out;
+    CHECK(io::inflate(rawDeflate(text), out, text.size()));
+    CHECK(out == text);
+    CHECK(!io::inflate(QByteArray("\xff\xff\xff", 3), out));
+    io::ZipReader zip;
+    CHECK(zip.open(sampleXfl()));
+    CHECK(zip.contains(QStringLiteral("library/ball.xml")));
+    CHECK(zip.read(QStringLiteral("DOMDocument.xml")) == QByteArray(kDomDocument));
+}
+
+VX_TEST(xfl_import)
+{
+    Document doc;
+    io::ImportReport report;
+    QString err;
+    CHECK(io::importXflZip(sampleXfl(), doc, &report, &err));
+    for (const QString& w : report.warnings) std::printf("  warning: %s\n", qPrintable(w));
+    CHECK(report.warnings.isEmpty());
+    CHECK_NEAR(doc.width, 640.0, 1e-9);
+    CHECK_NEAR(doc.fps, 30.0, 1e-9);
+    CHECK(doc.background == Color(0x10, 0x20, 0x30));
+    CHECK(doc.symbols.size() == 2);
+    const Symbol* ball = doc.symbolByName("Ball");
+    CHECK(ball && ball->folder == "Props" && ball->type == SymbolType::Graphic);
+    CHECK(doc.scenes.size() == 1 && doc.scenes[0].name == "Main");
+    const Timeline& tl = doc.scenes[0];
+    CHECK(tl.layers.size() == 2 && tl.layers[0].name == "Ball");
+
+    // Keyframes: the 2-frame gap becomes a blank keyframe.
+    const Layer& l = tl.layers[0];
+    CHECK(l.keys.size() == 3);
+    CHECK(l.keys[0].tween == TweenType::Classic && l.keys[0].classic.ease.kind == EaseKind::Classic);
+    CHECK(l.keys[0].classic.ease.strength == 50);
+    CHECK(l.keys[0].classic.rotate == RotateMode::Clockwise && l.keys[0].classic.rotations == 2);
+    CHECK(l.keys[1].start == 10 && l.keys[1].isEmpty());
+    CHECK(l.keys[2].start == 12 && l.keys[2].label == "end");
+
+    const auto* g = dynamic_cast<const InstanceElement*>(l.keys[0].elements.at(0).get());
+    CHECK(g && g->symbolId == ball->id && g->behavior == SymbolType::Graphic);
+    CHECK(g->loop == LoopMode::SingleFrame && g->firstFrame == 2);
+    CHECK(g->color.kind == ColorEffect::Kind::Alpha && std::abs(g->color.alpha - 0.5) < 1e-9);
+    CHECK_NEAR(g->pivot.x, 10.0, 1e-9);
+    CHECK_NEAR(g->matrix.tx, 100.0, 1e-9);
+
+    const auto* m = dynamic_cast<const InstanceElement*>(l.keys[2].elements.at(0).get());
+    CHECK(m && m->behavior == SymbolType::MovieClip && m->blend == BlendMode::Add && m->name == "glow1");
+    CHECK(m->filters.size() == 3);
+    CHECK(m->filters[0].type == FilterType::Blur && m->filters[0].blurX == 138 && m->filters[0].quality == 3);
+    CHECK(m->filters[1].type == FilterType::DropShadow && m->filters[1].inner && m->filters[1].color == Color(255, 0, 0, 128));
+    CHECK(m->filters[2].type == FilterType::AdjustColor && m->filters[2].hue == 30);
+
+    // Merge shape: a stroked 100 px square and a gradient quad at 200..250 px
+    // (hex coordinates, fractional twips).
+    const auto* sh = dynamic_cast<const ShapeElement*>(tl.layers[1].keys[0].elements.at(0).get());
+    CHECK(sh != nullptr);
+    CHECK(sh->graph->fills.size() == 2 && sh->graph->strokes.size() == 1);
+    CHECK(sh->graph->strokes[0].cap == CapStyle::Square && sh->graph->strokes[0].width == 2);
+    CHECK(sh->graph->fills[1].kind == FillStyle::Kind::Linear);
+    CHECK(sh->graph->fillAt({10, 10}) == 1);
+    CHECK(sh->graph->fillAt({225, 225}) == 2);
+    CHECK_NEAR(sh->graph->fillRegion(2).area(), 50.0 * (50.0 + 50.025) / 2, 1e-6); // one side at 250.025 px
+    // Library shapes: quadratic edge, fill side found automatically.
+    const auto* bs = dynamic_cast<const ShapeElement*>(ball->timeline.layers[0].keys[0].elements.at(0).get());
+    CHECK(bs && bs->graph->fills[0].color == Color(255, 0, 0, 191));
+    CHECK(bs->graph->fillAt({25, 0}) == 1);
+    const Symbol* glow = doc.symbolByName("Glow");
+    const auto* gs = dynamic_cast<const ShapeElement*>(glow->timeline.layers[0].keys[0].elements.at(0).get());
+    CHECK(gs && gs->graph->fillAt({5, 5}) == 1);
 }
 
 VX_TEST(real_fla_samples)

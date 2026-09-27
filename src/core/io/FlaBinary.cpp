@@ -757,6 +757,7 @@ private:
         }
         auto e = std::make_shared<InstanceElement>();
         e->symbolId = it->second;
+        e->behavior = s.cls == "CPicSprite" ? SymbolType::MovieClip : s.cls == "CPicButton" ? SymbolType::Button : SymbolType::Graphic;
         e->matrix = s.matrix;
         if (s.px != INT32_MIN && s.py != INT32_MIN) {
             const Vec2 p(s.px / kTwipsPerPixel, s.py / kTwipsPerPixel);

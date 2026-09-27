@@ -36,6 +36,9 @@ FlaFormat detectFla(const QString& path);
 /// Imports a .fla file (binary or XFL zip) or an .xfl folder / DOMDocument.xml.
 bool importFla(const QString& path, Document& doc, ImportReport* report = nullptr, QString* error = nullptr);
 
+/// XFL .fla (ZIP) from memory.
+bool importXflZip(const QByteArray& zip, Document& doc, ImportReport* report = nullptr, QString* error = nullptr);
+
 /// Binary (pre-CS5) .fla from memory.
 bool importBinaryFla(const QByteArray& data, Document& doc, ImportReport* report = nullptr, QString* error = nullptr);
 

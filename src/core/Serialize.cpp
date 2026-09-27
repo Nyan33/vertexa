@@ -310,6 +310,25 @@ ResponseCurve curveFromJson(const QJsonValue& v)
 QJsonObject elementToJson(const Element& e);
 ElementPtr elementFromJson(const QJsonObject& o);
 
+/// Symbol types of the document being read: instances saved before
+/// per-instance behaviour existed take their symbol's type.
+thread_local const std::map<std::string, SymbolType>* t_symbolTypes = nullptr;
+
+struct SymbolTypeScope {
+    std::map<std::string, SymbolType> types;
+    SymbolTypeScope(const QJsonArray& symbols, const Document* existing = nullptr)
+    {
+        if (existing)
+            for (const Symbol& s : existing->symbols) types[s.id] = s.type;
+        for (const QJsonValue& v : symbols) {
+            const QJsonObject o = v.toObject();
+            types[o["id"].toString().toStdString()] = enumFrom(o["type"], kSymbolType, SymbolType::MovieClip);
+        }
+        t_symbolTypes = &types;
+    }
+    ~SymbolTypeScope() { t_symbolTypes = nullptr; }
+};
+
 QJsonObject elementToJson(const Element& e)
 {
     QJsonObject o;
@@ -328,6 +347,7 @@ QJsonObject elementToJson(const Element& e)
         const auto& in = static_cast<const InstanceElement&>(e);
         o["type"] = "instance";
         o["symbol"] = QString::fromStdString(in.symbolId);
+        o["behavior"] = enumName(in.behavior, kSymbolType);
         if (in.color.kind != ColorEffect::Kind::None) o["color"] = colorEffectToJson(in.color);
         if (in.blend != BlendMode::Normal) o["blend"] = QString::fromUtf8(blendModeId(in.blend).data());
         o["loop"] = enumName(in.loop, kLoop);
@@ -404,6 +424,12 @@ ElementPtr elementFromJson(const QJsonObject& o)
     } else if (type == "instance") {
         auto in = std::make_shared<InstanceElement>();
         in->symbolId = o["symbol"].toString().toStdString();
+        if (o.contains("behavior")) {
+            in->behavior = enumFrom(o["behavior"], kSymbolType, SymbolType::MovieClip);
+        } else if (t_symbolTypes) {
+            const auto it = t_symbolTypes->find(in->symbolId);
+            if (it != t_symbolTypes->end()) in->behavior = it->second;
+        }
         in->color = colorEffectFromJson(o["color"].toObject());
         in->blend = blendModeFromId(o["blend"].toString("normal").toStdString());
         in->loop = enumFrom(o["loop"], kLoop, LoopMode::Loop);
@@ -814,6 +840,7 @@ bool deserializeDocument(const QByteArray& data, Document& doc, QString* error)
     d.height = stage["height"].toDouble(720);
     d.fps = stage["fps"].toDouble(24);
     d.background = colorFromValue(stage["background"], Color(255, 255, 255));
+    const SymbolTypeScope typeScope(root["symbols"].toArray());
     for (const QJsonValue& v : root["scenes"].toArray()) d.scenes.push_back(timelineFromJson(v.toObject()));
     for (const QJsonValue& v : root["symbols"].toArray()) d.symbols.push_back(symbolFromJson(v.toObject()));
     const QJsonObject images = root["images"].toObject();
@@ -884,6 +911,7 @@ std::vector<ElementPtr> deserializeClipboard(const QByteArray& data, Document& d
     std::vector<ElementPtr> out;
     const QJsonObject root = QJsonDocument::fromJson(data).object();
     if (root["format"].toString() != "vertexa-clipboard") return out;
+    const SymbolTypeScope typeScope(root["symbols"].toArray(), &doc);
     for (const QJsonValue& v : root["symbols"].toArray()) {
         Symbol s = symbolFromJson(v.toObject());
         if (!doc.symbol(s.id)) {

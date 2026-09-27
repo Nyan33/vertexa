@@ -292,8 +292,8 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
         ic.m = m;
         ic.ct = c.ct * in.color.toTransform();
         ic.depth = c.depth + 1;
-        const bool blends = in.blend != BlendMode::Normal && sym->type != SymbolType::Graphic && !c.outline;
-        const bool filtered = sym->type != SymbolType::Graphic && !c.outline && hasActiveFilters(in.filters);
+        const bool blends = in.blend != BlendMode::Normal && in.behavior != SymbolType::Graphic && !c.outline;
+        const bool filtered = in.behavior != SymbolType::Graphic && !c.outline && hasActiveFilters(in.filters);
         if (!blends && !filtered) {
             renderTimeline(target, sym->timeline, frame, ic);
             return;

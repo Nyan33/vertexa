@@ -207,8 +207,8 @@ public:
             const auto& in = static_cast<const InstanceElement&>(e);
             const Symbol* s = m_doc.symbol(in.symbolId);
             if (!s || !in.visible || depth > 32) return;
-            const QString blend = s->type != SymbolType::Graphic ? cssBlend(in.blend) : QString();
-            const QString filter = s->type != SymbolType::Graphic ? svgFilter(in.filters) : QString();
+            const QString blend = in.behavior != SymbolType::Graphic ? cssBlend(in.blend) : QString();
+            const QString filter = in.behavior != SymbolType::Graphic ? svgFilter(in.filters) : QString();
             if (!blend.isEmpty()) body += QString("<g style=\"mix-blend-mode:%1\">").arg(blend);
             if (!filter.isEmpty()) body += QString("<g filter=\"url(#%1)\">").arg(filter);
             timeline(s->timeline, instanceSymbolFrame(m_doc, in, it.localFrame), m, ct * in.color.toTransform(), depth + 1);

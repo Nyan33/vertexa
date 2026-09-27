@@ -63,6 +63,9 @@ enum class LoopMode { Loop, PlayOnce, SingleFrame, LoopReverse, PlayOnceReverse 
 class InstanceElement final : public Element {
 public:
     std::string symbolId;
+    /// Instance behaviour (Animate's Properties panel). It starts as the
+    /// symbol's type but can differ, e.g. a movie clip placed as a graphic.
+    SymbolType behavior = SymbolType::MovieClip;
     ColorEffect color;
     BlendMode blend = BlendMode::Normal;
     LoopMode loop = LoopMode::Loop;

@@ -235,7 +235,7 @@ bool Editor::enterInstance(int layerIndex, int elementIndex)
     e.parentLayer = m_layer;
     e.matrix = in->matrix;
     const Symbol* s = m_doc.symbol(in->symbolId);
-    const int startFrame = s->type == SymbolType::Graphic ? instanceSymbolFrame(m_doc, *in, items[elementIndex].localFrame) : 0;
+    const int startFrame = s && in->behavior == SymbolType::Graphic ? instanceSymbolFrame(m_doc, *in, items[elementIndex].localFrame) : 0;
     m_stack.push_back(e);
     m_frame = startFrame;
     m_layer = 0;

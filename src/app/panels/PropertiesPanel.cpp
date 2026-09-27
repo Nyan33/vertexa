@@ -478,8 +478,11 @@ void PropertiesPanel::buildSelection()
         QGridLayout* ig = section(sym ? QString::fromStdString(sym->name) : tr("Missing symbol"), tr("instance"));
         if (sym) {
             const std::string id = sym->id;
-            row(ig, tr("Behavior"), combo(m_content, {tr("Movie Clip"), tr("Graphic"), tr("Button")}, int(sym->type),
-                                          [this, id](int i) { m_ed->setSymbolType(id, SymbolType(i)); }));
+            // Like Animate: the behaviour belongs to the instance, the symbol's
+            // own type is set in the Library.
+            row(ig, tr("Behavior"), combo(m_content, {tr("Movie Clip"), tr("Graphic"), tr("Button")}, int(in->behavior), [this](int i) {
+                    m_ed->setInstanceProperty([i](InstanceElement& x) { x.behavior = SymbolType(i); }, tr("Instance Behavior"));
+                }));
             QStringList names;
             int cur = 0;
             for (int i = 0; i < int(doc.symbols.size()); ++i) {
@@ -587,7 +590,7 @@ void PropertiesPanel::buildSelection()
         case ColorEffect::Kind::None: break;
         }
         // Blending (movie clips and buttons, like Animate).
-        if (sym && sym->type != SymbolType::Graphic) {
+        if (sym && in->behavior != SymbolType::Graphic) {
             auto* bc = blendCombo(m_content, in->blend, [this](BlendMode b) {
                 m_ed->setInstanceProperty([b](InstanceElement& x) { x.blend = b; }, tr("Blending"));
             });
@@ -597,7 +600,7 @@ void PropertiesPanel::buildSelection()
                 }));
         }
         // Looping (graphic symbols).
-        if (sym && sym->type == SymbolType::Graphic) {
+        if (sym && in->behavior == SymbolType::Graphic) {
             row(ig, tr("Looping"), combo(m_content, {tr("Loop"), tr("Play Once"), tr("Single Frame"), tr("Loop Reverse"), tr("Play Once Reverse")},
                                          int(in->loop), [this](int i) {
                                              m_ed->setInstanceProperty([i](InstanceElement& x) { x.loop = LoopMode(i); }, tr("Looping"));
@@ -614,7 +617,7 @@ void PropertiesPanel::buildSelection()
         }
         auto* edit = new QPushButton(tr("Edit Symbol"), m_content);
         edit->setProperty("accent", true);
-        if (sym && sym->type != SymbolType::Graphic) buildFilters(*in, previewFx);
+        if (sym && in->behavior != SymbolType::Graphic) buildFilters(*in, previewFx);
         connect(edit, &QPushButton::clicked, this, [this]() {
             const ElementRef r = m_ed->selection().front();
             const int li = m_ed->timeline().layerIndex(r.layerId);
