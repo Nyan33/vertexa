@@ -211,36 +211,45 @@ void Renderer::renderLayerItems(QImage& target, const Timeline& tl, int layerInd
     const std::vector<EvalItem> items = evaluateLayer(m_doc, tl, layerIndex, frame);
     if (items.empty()) return;
     Ctx lc = c;
-    if (m_opts.outlineLayers && l.outline) {
+    if (m_opts.forceOutline) {
+        lc.outline = true;
+        lc.outlineColor = m_opts.outlineColor;
+    } else if (m_opts.outlineLayers && l.outline) {
         lc.outline = true;
         lc.outlineColor = toQColor(l.color);
     }
+    // Edit in place: which item (if any) of this layer lies on the focus path.
+    int focusItem = -1;
+    if (c.focus < m_opts.focusPath.size() && m_opts.focusPath[c.focus].first == l.id)
+        focusItem = m_opts.focusPath[c.focus].second;
+    auto draw = [&](QImage& dst, const Ctx& ctx) {
+        for (int i = 0; i < int(items.size()); ++i) renderElement(dst, items[i], ctx, i == focusItem);
+    };
     if ((l.blend != BlendMode::Normal || l.opacity < 1.0) && !lc.outline) {
         QImage buf(target.size(), QImage::Format_ARGB32_Premultiplied);
         buf.fill(0);
         lc.isolated = true;
-        renderList(buf, items, lc);
+        draw(buf, lc);
         compositeImage(target, buf, QPoint(0, 0), l.blend, l.opacity);
         return;
     }
-    renderList(target, items, lc);
+    draw(target, lc);
 }
 
 void Renderer::renderList(QImage& target, const std::vector<EvalItem>& items, const Ctx& c)
 {
-    for (const EvalItem& it : items) renderElement(target, it, c);
+    for (const EvalItem& it : items) renderElement(target, it, c, false);
 }
 
-void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c)
+void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c, bool onPath)
 {
     const Element& e = *item.element;
     Ctx ec = c;
     // Edit in place: descend along the focus path, skip the edited instance.
-    if (c.focus < m_opts.focusPath.size() && &e == m_opts.focusPath[c.focus]) {
-        if (c.focus + 1 == m_opts.focusPath.size()) return;
+    if (onPath) {
+        if (c.focus + 1 >= m_opts.focusPath.size()) return;
         ec.focus = c.focus + 1;
-    } else if (c.focus < m_opts.focusPath.size() && c.depth > 0) {
-        // Inside a symbol that is not on the path: nothing to track any more.
+    } else {
         ec.focus = m_opts.focusPath.size();
     }
     const Affine m = c.m * e.matrix;
@@ -263,7 +272,7 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c)
         const auto& g = static_cast<const GroupElement&>(e);
         Ctx gc = ec;
         gc.m = m;
-        for (const ElementPtr& ch : g.children) renderElement(target, {ch, item.localFrame}, gc);
+        for (const ElementPtr& ch : g.children) renderElement(target, {ch, item.localFrame}, gc, false);
         return;
     }
     case ElementType::Paint: {

@@ -6,6 +6,7 @@
 
 #include "core/Evaluate.h"
 
+#include <QColor>
 #include <QImage>
 #include <QRect>
 
@@ -21,9 +22,12 @@ struct RenderOptions {
     bool skipHidden = true;     ///< hidden layers are not drawn
     bool masksNeedLock = true;  ///< Animate shows masking only on locked mask layers
     bool outlineLayers = true;  ///< honour the per-layer outline toggle
-    /// Edit-in-place: elements along the path to the edited symbol. The last
-    /// one is not drawn (the editor draws it at full opacity).
-    std::vector<const Element*> focusPath;
+    bool forceOutline = false;  ///< draw everything as outlines (onion skin)
+    QColor outlineColor;
+    /// Edit-in-place: (layer id, element index) pairs locating the edited
+    /// instance through nested timelines. The instance itself is not drawn
+    /// (the editor draws its timeline at full opacity on top).
+    std::vector<std::pair<uint32_t, int>> focusPath;
 };
 
 class Renderer {
@@ -63,7 +67,7 @@ private:
     void renderTimeline(QImage& target, const Timeline& tl, int frame, const Ctx& c);
     void renderLayerItems(QImage& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c);
     void renderList(QImage& target, const std::vector<EvalItem>& items, const Ctx& c);
-    void renderElement(QImage& target, const EvalItem& item, const Ctx& c);
+    void renderElement(QImage& target, const EvalItem& item, const Ctx& c, bool onPath = false);
     void renderPaint(QImage& target, const ElementPtr& owner, const Ctx& c);
     bool layerHidden(const Timeline& tl, int index) const;
 
