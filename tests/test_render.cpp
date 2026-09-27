@@ -1,0 +1,276 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "TestMain.h"
+
+#include "core/DocumentOps.h"
+#include "core/VectorBrush.h"
+#include "render/Blend.h"
+#include "render/Filters.h"
+#include "render/Raster.h"
+#include "render/Renderer.h"
+#include "render/SvgExport.h"
+
+#include <QGuiApplication>
+
+using namespace vx;
+
+namespace {
+
+QImage blank(int w, int h, QRgb c = 0)
+{
+    QImage img(w, h, QImage::Format_ARGB32_Premultiplied);
+    img.fill(c);
+    return img;
+}
+
+} // namespace
+
+VX_TEST(no_seams_between_adjacent_fills)
+{
+    // Red and blue halves share an edge at a fractional x on a white background.
+    ShapeGraph g = graphFromRegion(Region::rect({0.0, 0.0, 10.37, 20.0}), FillStyle::solid(Color(255, 0, 0)));
+    g = overlay(g, graphFromRegion(Region::rect({10.37, 0.0, 20.0, 20.0}), FillStyle::solid(Color(0, 0, 255))));
+    QImage img = blank(20, 20, 0xffffffff);
+    Renderer::renderShape(img, g.renderData(), Affine{}, {}, img.rect());
+    const QRgb seam = img.pixel(10, 10);
+    // Pixel 10 is 37% red and 63% blue: no white must leak through.
+    CHECK(qGreen(seam) <= 1);
+    CHECK(std::abs(qRed(seam) - 94) <= 2);
+    CHECK(std::abs(qBlue(seam) - 161) <= 2);
+    CHECK(img.pixel(3, 3) == qRgb(255, 0, 0));
+    CHECK(img.pixel(15, 3) == qRgb(0, 0, 255));
+}
+
+VX_TEST(antialiased_coverage_is_exact)
+{
+    // A half-pixel wide vertical bar gives 50% coverage.
+    ShapeGraph g = graphFromRegion(Region::rect({2.0, 0.0, 2.5, 4.0}), FillStyle::solid(Color(0, 0, 0)));
+    QImage img = blank(4, 4);
+    Renderer::renderShape(img, g.renderData(), Affine{}, {}, img.rect());
+    CHECK(std::abs(qAlpha(img.pixel(2, 1)) - 128) <= 1);
+    CHECK(qAlpha(img.pixel(1, 1)) == 0);
+    // Holes stay empty.
+    ShapeGraph ring = graphFromRegion(booleanOp(Region::rect({0, 0, 8, 8}), Region::rect({2, 2, 6, 6}), BoolOp::Subtract),
+                                      FillStyle::solid(Color(0, 0, 0)));
+    QImage r = blank(8, 8);
+    Renderer::renderShape(r, ring.renderData(), Affine{}, {}, r.rect());
+    CHECK(qAlpha(r.pixel(4, 4)) == 0);
+    CHECK(qAlpha(r.pixel(1, 4)) == 255);
+}
+
+VX_TEST(blend_modes)
+{
+    QImage dst = blank(1, 1, qRgba(128, 128, 128, 255));
+    QImage src = blank(1, 1, qRgba(255, 0, 0, 255));
+    QImage d1 = dst;
+    compositeImage(d1, src, {0, 0}, BlendMode::Multiply, 1.0);
+    CHECK(std::abs(qRed(d1.pixel(0, 0)) - 128) <= 1 && qGreen(d1.pixel(0, 0)) == 0);
+    QImage d2 = dst;
+    compositeImage(d2, src, {0, 0}, BlendMode::Screen, 1.0);
+    CHECK(qRed(d2.pixel(0, 0)) == 255 && std::abs(qGreen(d2.pixel(0, 0)) - 128) <= 1);
+    QImage d3 = dst;
+    compositeImage(d3, src, {0, 0}, BlendMode::Erase, 1.0);
+    CHECK(qAlpha(d3.pixel(0, 0)) == 0);
+    QImage d4 = dst;
+    compositeImage(d4, src, {0, 0}, BlendMode::Difference, 1.0);
+    CHECK(std::abs(qRed(d4.pixel(0, 0)) - 127) <= 1 && std::abs(qGreen(d4.pixel(0, 0)) - 128) <= 1);
+    QImage d5 = dst;
+    compositeImage(d5, src, {0, 0}, BlendMode::Normal, 0.5);
+    CHECK(std::abs(qRed(d5.pixel(0, 0)) - 192) <= 1);
+}
+
+VX_TEST(vector_brushes_render)
+{
+    // Every built-in brush stroke renders as ordinary vector fills.
+    for (const VectorBrushPreset& p : builtinVectorBrushes()) {
+        std::vector<InputSample> samples;
+        for (int i = 0; i <= 40; ++i) {
+            InputSample q;
+            q.pos = {20 + i * 3.0, 30 + std::sin(i * 0.2) * 8};
+            q.pressure = 0.8;
+            samples.push_back(q);
+        }
+        VectorBrushPreset small = p;
+        small.size = std::min(p.size, 16.0);
+        const ShapeGraph g = vectorBrushGraph(vectorBrushStroke(small, vectorBrushPath(small, samples), FillStyle::solid(Color(0, 0, 0)), 3, 0.05));
+        QImage img = blank(160, 60);
+        Renderer::renderShape(img, g.renderData(), Affine{}, {}, img.rect());
+        int painted = 0;
+        for (int y = 0; y < img.height(); ++y)
+            for (int x = 0; x < img.width(); ++x) painted += qAlpha(img.pixel(x, y)) > 0;
+        CHECK(painted > 50);
+    }
+}
+
+VX_TEST(filters)
+{
+    // A white 20x20 square in the middle of a transparent 60x60 image.
+    auto square = [] {
+        QImage img = blank(60, 60);
+        ShapeGraph g = graphFromRegion(Region::rect({20, 20, 40, 40}), FillStyle::solid(Color(255, 255, 255)));
+        Renderer::renderShape(img, g.renderData(), Affine{}, {}, img.rect());
+        return img;
+    };
+    // Drop shadow at 45 degrees: below-right of the square, not above-left.
+    {
+        QImage img = square();
+        Filter f = Filter::defaults(FilterType::DropShadow);
+        f.blurX = f.blurY = 2;
+        f.distance = 8;
+        applyFilters(img, {f}, 1.0);
+        CHECK(qAlpha(img.pixel(44, 44)) > 150);
+        CHECK(qRed(img.pixel(44, 44)) < 30);       // black shadow
+        CHECK(qAlpha(img.pixel(16, 16)) == 0);
+        CHECK(img.pixel(30, 30) == qRgba(255, 255, 255, 255)); // object on top
+        // Scale doubles the distance (zoomed view).
+        QImage z = square();
+        applyFilters(z, {f}, 2.0);
+        CHECK(qAlpha(z.pixel(49, 49)) > 100);
+        CHECK(qAlpha(img.pixel(49, 49)) < 40);
+    }
+    // Glow spreads evenly; knockout removes the object.
+    {
+        QImage img = square();
+        Filter g = Filter::defaults(FilterType::Glow);
+        g.blurX = g.blurY = 8;
+        g.knockout = true;
+        applyFilters(img, {g}, 1.0);
+        CHECK(qAlpha(img.pixel(30, 30)) == 0);
+        CHECK(qAlpha(img.pixel(18, 30)) > 40 && qRed(img.pixel(18, 30)) > qGreen(img.pixel(18, 30)));
+        CHECK(std::abs(qAlpha(img.pixel(18, 30)) - qAlpha(img.pixel(41, 30))) <= 12);
+    }
+    // Blur softens the edge symmetrically and keeps total coverage.
+    {
+        QImage img = square();
+        Filter b = Filter::defaults(FilterType::Blur);
+        b.blurX = b.blurY = 6;
+        applyFilters(img, {b}, 1.0);
+        CHECK(qAlpha(img.pixel(19, 30)) > 20 && qAlpha(img.pixel(19, 30)) < 235);
+        long sum = 0;
+        for (int y = 0; y < 60; ++y)
+            for (int x = 0; x < 60; ++x) sum += qAlpha(img.pixel(x, y));
+        CHECK(std::abs(sum - 400L * 255) < 400L * 255 / 50);
+    }
+    // Adjust colour: a hue rotation turns red towards green / blue.
+    {
+        QImage img = blank(4, 4, qRgba(255, 0, 0, 255));
+        Filter a = Filter::defaults(FilterType::AdjustColor);
+        a.hue = 120;
+        applyFilters(img, {a}, 1.0);
+        CHECK(qRed(img.pixel(1, 1)) < qGreen(img.pixel(1, 1)));
+        a.hue = 0;
+        CHECK(!hasActiveFilters({a}));
+    }
+    // Inside a document: a movie clip with a glow renders outside its shape.
+    {
+        Document d = Document::createDefault();
+        auto inst = convertToSymbol(d, {makeShapeElement(graphFromRegion(Region::rect({0, 0, 20, 20}),
+                                                                           FillStyle::solid(Color(0, 0, 255))), false)},
+                                    "Box", SymbolType::MovieClip, {0, 0});
+        auto glowing = inst->cloneAs<InstanceElement>();
+        glowing->matrix = Affine::translate(100, 100);
+        Filter g = Filter::defaults(FilterType::Glow);
+        g.blurX = g.blurY = 10;
+        glowing->filters = {g};
+        d.scenes[0].layers[0].keys[0].elements = {glowing};
+        const QImage frame = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, true);
+        CHECK(qAlpha(frame.pixel(97, 110)) > 30);       // glow left of the box
+        CHECK(qRed(frame.pixel(97, 110)) > qBlue(frame.pixel(97, 110)));
+        CHECK(qBlue(frame.pixel(110, 110)) > 200);      // the box itself
+        CHECK(qAlpha(frame.pixel(60, 110)) == 0);
+        const QString svg = frameToSvg(d, d.scenes[0], 0);
+        CHECK(svg.contains("<feDropShadow") && svg.contains("filter=\"url(#f"));
+    }
+}
+
+VX_TEST(document_frame_render)
+{
+    Document d = Document::createDefault();
+    d.width = 100;
+    d.height = 50;
+    auto shape = makeShapeElement(graphFromRegion(Region::rect({0, 0, 20, 20}), FillStyle::solid(Color(0, 128, 0))), false);
+    auto inst = convertToSymbol(d, {shape}, "Box", SymbolType::MovieClip, {0, 0});
+    inst->matrix = Affine::translate(40, 10);
+    inst->color.kind = ColorEffect::Kind::Tint;
+    inst->color.tint = Color(255, 0, 0);
+    inst->color.tintAmount = 1.0;
+    d.scenes[0].layers[0].keys[0].elements = {inst};
+    const QImage img = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, false);
+    CHECK(img.pixel(50, 20) == qRgb(255, 0, 0));
+    CHECK(img.pixel(5, 5) == qRgb(255, 255, 255));
+    // Mask layer (locked) clips the masked layer.
+    Layer mask = d.makeLayer("Mask");
+    mask.type = LayerType::Mask;
+    mask.locked = true;
+    mask.keys[0].elements = {makeShapeElement(graphFromRegion(Region::rect({40, 10, 50, 30}), FillStyle::solid(Color(0, 0, 0))), false)};
+    d.scenes[0].layers[0].parentId = mask.id;
+    d.scenes[0].layers.insert(d.scenes[0].layers.begin(), mask);
+    const QImage masked = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, false);
+    CHECK(masked.pixel(45, 20) == qRgb(255, 0, 0));
+    CHECK(masked.pixel(55, 20) == qRgb(255, 255, 255));
+}
+
+VX_TEST(button_states_and_nine_slice_render)
+{
+    Document d = Document::createDefault();
+    // Button: red Up, green Over, blue Down squares.
+    Symbol b;
+    b.id = d.newSymbolId();
+    b.name = "Btn";
+    b.type = SymbolType::Button;
+    Layer bl = d.makeLayer("Layer 1");
+    bl.keys.clear();
+    const Color colors[3] = {Color(255, 0, 0), Color(0, 255, 0), Color(0, 0, 255)};
+    for (int f = 0; f < 3; ++f) {
+        Keyframe k;
+        k.start = f;
+        k.duration = 1;
+        k.elements = {makeShapeElement(graphFromRegion(Region::rect({0, 0, 20, 20}), FillStyle::solid(colors[f])), false)};
+        bl.keys.push_back(k);
+    }
+    b.timeline.layers.push_back(bl);
+    d.symbols.push_back(b);
+    auto inst = std::make_shared<InstanceElement>();
+    inst->symbolId = b.id;
+    inst->behavior = SymbolType::Button;
+    inst->matrix = Affine::translate(10, 10);
+    d.scenes[0].layers[0].keys[0].elements = {inst};
+    auto pixel = [&](RenderOptions o, int x, int y) {
+        QImage img = blank(120, 60);
+        Renderer(d, o).render(img, d.scenes[0], 0, Affine{});
+        return img.pixel(x, y);
+    };
+    CHECK(qRed(pixel({}, 20, 20)) == 255);
+    RenderOptions over;
+    over.hotButton = d.scenes[0].layers[0].keys[0].elements[0].get();
+    CHECK(qGreen(pixel(over, 20, 20)) == 255 && qRed(pixel(over, 20, 20)) == 0);
+    over.hotState = ButtonState::Down;
+    CHECK(qBlue(pixel(over, 20, 20)) == 255);
+
+    // 9-slice: a 40x20 panel with a 4 px dark border scaled 2.5x wide keeps a
+    // 4 px border on the left instead of a 10 px one.
+    Document p = Document::createDefault();
+    ShapeGraph panel = graphFromRegion(Region::rect({0, 0, 40, 20}), FillStyle::solid(Color(0, 0, 0)));
+    panel = overlay(panel, graphFromRegion(Region::rect({4, 4, 36, 16}), FillStyle::solid(Color(255, 255, 255))));
+    auto pi = convertToSymbol(p, {makeShapeElement(panel, false)}, "Panel", SymbolType::MovieClip, {0, 0});
+    pi->matrix = Affine::scale(2.5, 1.0);
+    p.scenes[0].layers[0].keys[0].elements = {pi};
+    auto render = [&]() {
+        QImage img = blank(120, 30);
+        Renderer(p).render(img, p.scenes[0], 0, Affine{});
+        return img;
+    };
+    QImage plain = render();
+    CHECK(qRed(plain.pixel(6, 10)) < 20); // border stretched to 10 px
+    p.symbols.back().scale9 = Rect(4, 4, 36, 16);
+    QImage sliced = render();
+    CHECK(qRed(sliced.pixel(6, 10)) > 235);  // inside the white middle
+    CHECK(qRed(sliced.pixel(2, 10)) < 20);   // border still 4 px wide
+    CHECK(qRed(sliced.pixel(97, 10)) < 20);  // right border ends at 100
+    CHECK(qRed(sliced.pixel(94, 10)) > 235);
+}
+
+int main(int argc, char** argv)
+{
+    QGuiApplication app(argc, argv);
+    return vxtest::runAll(argc, argv);
+}

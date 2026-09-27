@@ -1,0 +1,233 @@
+name: CI
+
+# Every pull request and every push to main builds, tests and packages Vertexa
+# for Linux (AppImage), macOS (universal .dmg) and Windows (.zip); the packages
+# are attached to the run as artifacts. Pushes to main also refresh the
+# "Nightly" pre-release, and v* tags publish a versioned release.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish this build as the Nightly pre-release
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build qt6-base-dev libgl1-mesa-dev
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Screenshot
+        run: QT_QPA_PLATFORM=offscreen ./build/src/app/vertexa --demo --screenshot vertexa-linux.png --frame 12
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-linux-${{ matrix.compiler }}
+          path: vertexa-linux.png
+
+  appimage:
+    name: Linux (AppImage)
+    # The oldest supported runner keeps the AppImage compatible with older
+    # distributions (glibc 2.35+).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          cache: true
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build g++-12 libgl1-mesa-dev libegl1 libfuse2 \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+      - name: Configure
+        env:
+          CC: gcc-12
+          CXX: g++-12
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          # Also ship the offscreen platform: headless use (--screenshot) and the smoke test.
+          EXTRA_PLATFORM_PLUGINS: libqoffscreen.so
+        run: |
+          DESTDIR=AppDir cmake --install build
+          for tool in linuxdeploy linuxdeploy-plugin-qt; do
+            curl -sSfL -o "$tool-x86_64.AppImage" "https://github.com/linuxdeploy/$tool/releases/download/continuous/$tool-x86_64.AppImage"
+            chmod +x "$tool-x86_64.AppImage"
+          done
+          export QMAKE="$QT_ROOT_DIR/bin/qmake"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage
+          mv Vertexa-*.AppImage Vertexa-linux-x86_64.AppImage
+      - name: Smoke test
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./Vertexa-linux-x86_64.AppImage --demo --screenshot appimage.png --frame 12
+          test -s appimage.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vertexa-linux-x86_64
+          path: Vertexa-linux-x86_64.AppImage
+          retention-days: 30
+
+  macos:
+    name: macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          cache: true
+      - name: Install dependencies
+        run: brew install ninja || true
+      - name: Configure
+        # Universal binary: Apple silicon and Intel Macs, macOS 12 and later.
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp -R build/src/app/vertexa.app dist/Vertexa.app
+          macdeployqt dist/Vertexa.app -always-overwrite
+          # Deployment rewrites the binaries: sign again (ad hoc, not notarised).
+          codesign --force --deep --sign - dist/Vertexa.app
+          codesign --verify --deep --strict dist/Vertexa.app
+          cp LICENSE dist/LICENSE.txt
+          ln -s /Applications dist/Applications
+          for attempt in 1 2 3; do
+            hdiutil create -volname Vertexa -srcfolder dist -ov -format UDZO Vertexa-macos-universal.dmg && break
+            sleep 10
+          done
+          test -s Vertexa-macos-universal.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vertexa-macos-universal
+          path: Vertexa-macos-universal.dmg
+          retention-days: 30
+
+  windows:
+    name: Windows (MSVC)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/Vertexa | Out-Null
+          Copy-Item build/src/app/vertexa.exe dist/Vertexa/
+          windeployqt --release --no-translations --compiler-runtime dist/Vertexa/vertexa.exe
+          Copy-Item LICENSE dist/Vertexa/LICENSE.txt
+          Copy-Item resources/fonts/OFL.txt dist/Vertexa/FONTS-OFL.txt
+          Compress-Archive -Path dist/Vertexa -DestinationPath Vertexa-windows-x64.zip
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          # The deployed DLLs must load; the offscreen platform comes from the Qt install.
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = "$env:QT_ROOT_DIR/plugins/platforms"
+          $p = Start-Process dist/Vertexa/vertexa.exe -ArgumentList '--demo', '--screenshot', "$PWD/windows.png", '--frame', '12' -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or -not (Test-Path windows.png)) { throw "vertexa.exe did not start (exit code $($p.ExitCode))" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vertexa-windows-x64
+          path: Vertexa-windows-x64.zip
+          retention-days: 30
+
+  publish:
+    name: Publish release
+    needs: [linux, appimage, macos, windows]
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Vertexa-*
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        run: |
+          ls -la dist
+          cat > notes.md <<EOF
+          Downloads:
+
+          - **Windows**: \`Vertexa-windows-x64.zip\`. Unzip it and run \`vertexa.exe\`. If SmartScreen warns about an unknown publisher, choose *More info → Run anyway*.
+          - **macOS** (Apple silicon and Intel, macOS 12+): \`Vertexa-macos-universal.dmg\`. Drag Vertexa to Applications. The app is not notarised: open it the first time with right-click → *Open*, or run \`xattr -dr com.apple.quarantine /Applications/Vertexa.app\`.
+          - **Linux** (x86_64, glibc 2.35+): \`Vertexa-linux-x86_64.AppImage\`. Run \`chmod +x Vertexa-linux-x86_64.AppImage\`, then start it.
+
+          Built from ${GITHUB_SHA} (${GITHUB_REF_NAME}) on $(date -u '+%Y-%m-%d %H:%M UTC').
+          EOF
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            else
+              gh release create "$GITHUB_REF_NAME" dist/* --title "Vertexa ${GITHUB_REF_NAME#v}" --notes-file notes.md --generate-notes
+            fi
+          else
+            # One rolling pre-release that always holds the latest build.
+            gh release delete nightly --yes --cleanup-tag || true
+            gh release create nightly dist/* --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "Nightly build" --notes-file notes.md
+          fi
