@@ -42,11 +42,18 @@ arrangement that splits curves at their true intersections and labels faces
   handles, **Free Transform (Q)** scales/rotates/skews around a movable pivot.
 - **Seam-free rendering** — all fills of a shape are rasterised in one
   exact-coverage pass, so adjacent colours never show hairline gaps.
+- **GPU rendering** — with a hardware OpenGL 3.3 (or OpenGL ES 3.0) driver
+  the stage is drawn on the GPU: fills through stencil-then-cover with
+  multisampling, blend modes, masks and colour effects in shaders. Without
+  one (or with a software OpenGL) the CPU renderer takes over. Toggle it in
+  *View ▸ GPU Rendering*; `VERTEXA_GPU=0` turns it off at start.
 
 **Timeline.** Layers, folders, mask and motion-guide layers, visibility / lock /
 outline toggles, keyframes, blank keyframes, spans, labels, onion skin, drag to
 move frames and layers, and the familiar keys: `F5`, `Shift+F5`, `F6`,
 `Shift+F6`, `F7`, `Enter`, `,` `.`, `Ctrl+Alt+C/X/V`… ([all shortcuts](docs/HOTKEYS.md)).
+Loop playback (`Alt+Shift+L`) plays the frames between the bracket on the
+ruler; drag its ends to choose them.
 
 **Symbols.**
 - Movie clips, graphics and buttons in a library with **folders** (drag
@@ -143,7 +150,7 @@ asks; on Linux run `chmod +x` on the AppImage.
 ## Building
 
 Requirements: a C++20 compiler (GCC 11+, Clang 14+, MSVC 2022), CMake 3.21+,
-Qt 6.4+ (Core, Gui, Widgets).
+Qt 6.4+ (Core, Gui, Widgets, OpenGL).
 
 ```bash
 # Ubuntu / Debian
@@ -173,7 +180,7 @@ src/geom    exact geometry kernel (pure C++, no Qt): Bezier math, intersections,
 src/core    document model: Flash-style shape graph and its operations, elements,
             timelines, symbols, tweens, easing, filters, vector brushes, .vtx format
 src/core/io FLA (OLE2 + MFC archives) and XFL (ZIP + XML) import
-src/render  scanline rasteriser, blend modes, filters, renderer, SVG export
+src/render  scanline rasteriser, blend modes, filters, renderer, OpenGL renderer, SVG export
 src/app     Qt Widgets application: stage, tools, timeline and panels
 tests       unit tests for every layer plus UI tests driving the real stage
 ```

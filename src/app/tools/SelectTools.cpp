@@ -984,8 +984,11 @@ void FreeTransformTool::move(const ToolEvent& e)
 void FreeTransformTool::release(const ToolEvent& e)
 {
     const Handle h = m_handle;
-    m_handle = Handle::None;
     if (h == Handle::None) return;
+    // The final transform depends on the handle being dragged: compute it
+    // before the drag state is cleared.
+    const Affine t = h == Handle::Pivot ? Affine{} : currentTransform(e.pos, e.mods);
+    m_handle = Handle::None;
     if (h == Handle::Pivot) {
         const auto els = ed->selectedElements();
         if (els.size() == 1) {
@@ -1006,7 +1009,6 @@ void FreeTransformTool::release(const ToolEvent& e)
         update();
         return;
     }
-    const Affine t = currentTransform(e.pos, e.mods);
     ed->setPreview(std::nullopt);
     if (!(t == Affine{})) ed->transformSelection(t, QObject::tr("Free Transform"));
     update();

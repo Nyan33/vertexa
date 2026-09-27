@@ -3,6 +3,8 @@
 
 #include "core/ShapeOps.h"
 
+#include <map>
+
 using namespace vx;
 
 namespace {
@@ -197,6 +199,86 @@ VX_TEST(mirror_keeps_fill_sides)
     const ShapeGraph m = s.transformed(Affine::scale(-1, 1));
     CHECK(m.fillAt({-5, 5}) != 0);
     CHECK(m.fillAt({5, 5}) == 0);
+}
+
+VX_TEST(local_merge_matches_full_merge)
+{
+    // A layer with a background, many separate islands (some with holes,
+    // some touching each other) and strokes; painting and erasing locally
+    // must give exactly what the full arrangement gives.
+    const FillStyle bg = FillStyle::solid(Color(20, 120, 40)), red = FillStyle::solid(Color(220, 30, 30)),
+                    blue = FillStyle::solid(Color(30, 60, 220));
+    StrokeStyle line;
+    line.width = 2;
+    ShapeGraph layer = graphFromRegion(Region::rect({-50, -50, 650, 650}), bg);
+    for (int i = 0; i < 12; ++i)
+        for (int j = 0; j < 12; ++j) {
+            const Vec2 c(i * 50.0 + 20, j * 50.0 + 20);
+            const bool round = (i + j) % 2;
+            Region r = round ? Region::circle(c, 14) : Region::rect({c.x - 12, c.y - 12, c.x + 12, c.y + 12});
+            if ((i * 7 + j) % 5 == 0) r = booleanOp(r, Region::circle(c, 5), BoolOp::Subtract);
+            layer = overlay(layer, graphFromRegion(r, (i + j) % 3 ? red : blue), {.localized = false});
+        }
+    layer = overlay(layer, graphFromPaths({{Cubic::line({0, 300}, {600, 310})}}, line), {.localized = false});
+    CHECK(layer.edges.size() > 128);
+
+    auto sameFills = [](const ShapeGraph& a, const ShapeGraph& b) {
+        if (a.fills.size() != b.fills.size()) return false;
+        for (const FillStyle& f : a.fills) {
+            const int ia = [&] { for (size_t k = 0; k < a.fills.size(); ++k) if (a.fills[k] == f) return int(k) + 1; return 0; }();
+            const int ib = [&] { for (size_t k = 0; k < b.fills.size(); ++k) if (b.fills[k] == f) return int(k) + 1; return 0; }();
+            if (!ib) return false;
+            const double aa = a.fillRegion(ia).area(), ab = b.fillRegion(ib).area();
+            if (std::abs(aa - ab) > 1e-6 * std::max(1.0, aa)) return false;
+        }
+        const Region ua = a.fillRegion(0), ub = b.fillRegion(0);
+        return std::abs(ua.area() - ub.area()) < 1e-6 * std::max(1.0, ua.area()) &&
+               std::abs(booleanOp(ua, ub, BoolOp::Xor).area()) < 1e-3;
+    };
+    const ShapeGraph stroke = graphFromRegion(Region::circle({137, 262}, 30), blue);
+    for (PaintMode mode : {PaintMode::Normal, PaintMode::Fills, PaintMode::Behind}) {
+        OverlayOptions local, full;
+        local.mode = full.mode = mode;
+        full.localized = false;
+        const ShapeGraph a = overlay(layer, stroke, local), b = overlay(layer, stroke, full);
+        CHECK(sameFills(a, b));
+        CHECK(a.edges.size() + 4 >= b.edges.size() && a.edges.size() <= b.edges.size() + 4);
+        size_t strokesA = 0, strokesB = 0;
+        for (const GEdge& e : a.edges) strokesA += e.stroke != 0;
+        for (const GEdge& e : b.edges) strokesB += e.stroke != 0;
+        CHECK(strokesA == strokesB);
+    }
+    // Painting in the middle of the background (no island reached).
+    const ShapeGraph dab = graphFromRegion(Region::circle({45, 45}, 3), red);
+    CHECK(sameFills(overlay(layer, dab), overlay(layer, dab, {.localized = false})));
+    // Erasing.
+    const Region eraser = Region::circle({320, 330}, 40);
+    CHECK(sameFills(erase(layer, eraser, EraseMode::Normal), erase(layer, eraser, EraseMode::Normal, nullptr, false)));
+    CHECK(sameFills(erase(layer, eraser, EraseMode::Fills), erase(layer, eraser, EraseMode::Fills, nullptr, false)));
+}
+
+VX_TEST(clean_region_graph_matches_full_build)
+{
+    const FillStyle f = FillStyle::solid(Color(10, 20, 30));
+    Region ring = booleanOp(Region::circle({0, 0}, 40), Region::circle({0, 0}, 20), BoolOp::Subtract);
+    Region islands = ring;
+    for (const Contour& c : Region::circle({0, 0}, 8).contours) islands.contours.push_back(c);
+    islands = normalizeRegion(islands);
+    for (const Region& r : {normalizeRegion(Region::rect({0, 0, 10, 10})), ring, islands, ring.reversed()}) {
+        const ShapeGraph a = graphFromCleanRegion(r, f), b = graphFromRegion(r, f);
+        const Region ra = a.fillRegion(0), rb = b.fillRegion(0);
+        CHECK(std::abs(ra.area() - rb.area()) < 1e-6 * std::max(1.0, rb.area()));
+        CHECK(std::abs(booleanOp(ra, rb, BoolOp::Xor).area()) < 1e-6);
+        // Every end point is shared: the graph is closed.
+        std::map<std::pair<double, double>, int> degree;
+        for (const GEdge& e : a.edges) {
+            ++degree[{e.c.p0.x, e.c.p0.y}];
+            ++degree[{e.c.p3.x, e.c.p3.y}];
+        }
+        bool even = true;
+        for (const auto& [p, d] : degree) even &= d % 2 == 0;
+        CHECK(even);
+    }
 }
 
 VX_TEST_MAIN()

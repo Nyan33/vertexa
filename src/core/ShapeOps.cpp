@@ -3,10 +3,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <queue>
 #include <set>
+#include <unordered_map>
 
 namespace vx {
 
@@ -240,6 +242,49 @@ ShapeGraph graphFromRegion(const Region& r, const FillStyle& fill)
     return e.emit([&](int f) { return e.inMask(f, 0) ? fid : 0; }, [](int, int, int) { return 0; });
 }
 
+ShapeGraph graphFromCleanRegion(const Region& r, const FillStyle& fill)
+{
+    ShapeGraph g;
+    // The largest contour decides which side of travel holds the fill; in a
+    // clean region every contour agrees (outer loops and holes run opposite
+    // ways, so the fill is on the same side of both).
+    const Contour* largest = nullptr;
+    double best = 0.0;
+    for (const Contour& c : r.contours) {
+        double a = 0.0;
+        for (const Cubic& cu : c) a += cu.areaContribution();
+        if (std::abs(a) > best) {
+            best = std::abs(a);
+            largest = &c;
+        }
+    }
+    if (!largest || best <= 0.0) return g;
+    const int fid = g.addFill(fill);
+    bool left = true;
+    for (const Cubic& cu : *largest) {
+        const Vec2 d = cu.p3 - cu.p0;
+        const double len = d.length();
+        if (len < 1e-9) continue;
+        const Vec2 m = cu.eval(0.5), t = cu.tangent(0.5);
+        const double eps = std::max(len * 1e-3, 1e-6);
+        left = r.winding(m + Vec2{-t.y, t.x} * eps) != 0;
+        break;
+    }
+    for (const Contour& c : r.contours) {
+        const size_t first = g.edges.size();
+        for (const Cubic& cu : c) {
+            if (cu.isDegenerate(1e-12)) continue;
+            GEdge e;
+            e.c = cu;
+            if (g.edges.size() > first) e.c.p0 = g.edges.back().c.p3; // exact shared end points
+            (left ? e.fillL : e.fillR) = fid;
+            g.edges.push_back(e);
+        }
+        if (g.edges.size() > first) g.edges.back().c.p3 = g.edges[first].c.p0;
+    }
+    return g;
+}
+
 ShapeGraph graphFromPaths(const std::vector<std::vector<Cubic>>& chains, const StrokeStyle& stroke)
 {
     Engine e(0);
@@ -266,9 +311,112 @@ ShapeGraph graphFromShape(const Region& area, const FillStyle* fill, const Strok
 
 // --- merging ------------------------------------------------------------------
 
+namespace {
+
+// --- locality -------------------------------------------------------------------
+//
+// Merge shapes are planar: edges only meet at shared end points. A connected
+// component of edges whose bounds do not reach the area being painted or
+// erased can neither be cut nor change its fills, so only the components
+// that reach it go through the arrangement; the others are copied as they
+// are. This keeps painting cost proportional to the local detail instead of
+// everything already drawn on the layer.
+
+constexpr size_t kLocalityThreshold = 128;
+
+struct EndKey {
+    uint64_t x, y;
+    explicit EndKey(Vec2 p)
+    {
+        const double px = p.x == 0.0 ? 0.0 : p.x, py = p.y == 0.0 ? 0.0 : p.y; // -0 == +0
+        std::memcpy(&x, &px, 8);
+        std::memcpy(&y, &py, 8);
+    }
+    bool operator==(const EndKey&) const = default;
+};
+struct EndKeyHash {
+    size_t operator()(const EndKey& k) const
+    {
+        uint64_t h = k.x * 0x9E3779B97F4A7C15ull;
+        h ^= (k.y + 0x632BE59BD9B4E019ull + (h << 6) + (h >> 2));
+        return size_t(h);
+    }
+};
+
+/// Splits `g` into the components that reach `area` (`near`, same style
+/// tables as `g`) and the indices of the other edges (`far`). False when
+/// every edge is near, so there is nothing to gain.
+bool splitByReach(const ShapeGraph& g, const Rect& area, ShapeGraph& near, std::vector<int>& far)
+{
+    const int n = int(g.edges.size());
+    std::vector<int> parent(n);
+    for (int i = 0; i < n; ++i) parent[i] = i;
+    std::function<int(int)> root = [&](int i) {
+        while (parent[i] != i) i = parent[i] = parent[parent[i]];
+        return i;
+    };
+    std::unordered_map<EndKey, int, EndKeyHash> firstAt;
+    firstAt.reserve(size_t(n) * 2);
+    for (int i = 0; i < n; ++i)
+        for (Vec2 p : {g.edges[i].c.p0, g.edges[i].c.p3}) {
+            auto [it, fresh] = firstAt.emplace(EndKey(p), i);
+            if (!fresh) parent[root(i)] = root(it->second);
+        }
+    std::vector<Rect> box(n);
+    for (int i = 0; i < n; ++i) {
+        Rect b = g.edges[i].c.bounds();
+        if (g.edges[i].stroke > 0) b = b.inflated(g.stroke(g.edges[i].stroke).width * 0.5);
+        box[root(i)].include(b);
+    }
+    std::vector<char> reach(n, 0);
+    for (int i = 0; i < n; ++i)
+        if (root(i) == i) reach[i] = box[i].intersects(area);
+    near.fills = g.fills;
+    near.strokes = g.strokes;
+    near.edges.clear();
+    far.clear();
+    for (int i = 0; i < n; ++i) {
+        if (reach[root(i)]) near.edges.push_back(g.edges[i]);
+        else far.push_back(i);
+    }
+    return !far.empty();
+}
+
+/// `result` plus the untouched edges `far` of `base` (styles remapped).
+ShapeGraph joinFar(ShapeGraph result, const ShapeGraph& base, const std::vector<int>& far)
+{
+    std::vector<int> fm(base.fills.size() + 1, -1), sm(base.strokes.size() + 1, -1);
+    fm[0] = sm[0] = 0;
+    auto fillOf = [&](int id) {
+        if (fm[id] < 0) fm[id] = result.addFill(base.fills[id - 1]);
+        return fm[id];
+    };
+    auto strokeOf = [&](int id) {
+        if (sm[id] < 0) sm[id] = result.addStroke(base.strokes[id - 1]);
+        return sm[id];
+    };
+    result.edges.reserve(result.edges.size() + far.size());
+    for (int i : far) {
+        GEdge e = base.edges[i];
+        e.fillL = fillOf(e.fillL);
+        e.fillR = fillOf(e.fillR);
+        e.stroke = strokeOf(e.stroke);
+        result.edges.push_back(e);
+    }
+    result.invalidate();
+    return result;
+}
+
+} // namespace
+
 ShapeGraph overlay(const ShapeGraph& base, const ShapeGraph& top, const OverlayOptions& opt)
 {
     if (top.isEmpty()) return base;
+    if (opt.localized && base.edges.size() > kLocalityThreshold) {
+        ShapeGraph near;
+        std::vector<int> far;
+        if (splitByReach(base, top.bounds(true).inflated(1e-6), near, far)) return joinFar(overlay(near, top, opt), base, far);
+    }
     const bool useMask = opt.mask && (opt.mode == PaintMode::Selection || opt.mode == PaintMode::Inside);
     Engine e(useMask ? 1 : 0);
     e.addBase(base);
@@ -299,9 +447,17 @@ ShapeGraph overlay(const ShapeGraph& base, const ShapeGraph& top, const OverlayO
     return e.emit(faceFill, edgeStroke);
 }
 
-ShapeGraph erase(const ShapeGraph& base, const Region& eraser, EraseMode mode, const Region* mask)
+ShapeGraph erase(const ShapeGraph& base, const Region& eraser, EraseMode mode, const Region* mask, bool localized)
 {
     if (base.isEmpty() || eraser.isEmpty()) return base;
+    if (localized && base.edges.size() > kLocalityThreshold) {
+        ShapeGraph near;
+        std::vector<int> far;
+        if (splitByReach(base, eraser.bounds().inflated(1e-6), near, far)) {
+            if (near.isEmpty()) return base;
+            return joinFar(erase(near, eraser, mode, mask), base, far);
+        }
+    }
     Engine e(mask ? 2 : 1);
     e.addBase(base);
     e.addMask(eraser, 0);

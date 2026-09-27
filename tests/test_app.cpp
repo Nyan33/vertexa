@@ -13,6 +13,7 @@
 #include "render/QtConvert.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QAction>
 #include <QUndoStack>
@@ -49,6 +50,8 @@ struct Fixture {
         send(QEvent::MouseButtonPress, pts.front(), Qt::LeftButton, mods);
         for (size_t i = 1; i < pts.size(); ++i) send(QEvent::MouseMove, pts[i], Qt::LeftButton, mods);
         send(QEvent::MouseButtonRelease, pts.back(), Qt::NoButton, mods);
+        // Paint brush strokes are merged in the background.
+        while (view.hasPendingWork()) QApplication::processEvents(QEventLoop::AllEvents, 5);
     }
 
     void line(ToolId tool, Vec2 a, Vec2 b, int steps = 30, Qt::KeyboardModifiers mods = {})
@@ -278,6 +281,74 @@ VX_TEST(buttons_folders_and_nine_slice_guides)
     f.drag(ToolId::Selection, {{g.x0, mid}, {g.x0 - 5, mid}, {g.x0 - 10, mid}});
     const Rect moved = *f.ed.doc().symbol(id)->scale9;
     CHECK(std::abs(moved.x0 - (g.x0 - 10)) < 1.0 && moved.x1 == g.x1 && moved.y0 == g.y0);
+}
+
+VX_TEST(free_transform_keeps_the_result)
+{
+    Fixture f;
+    f.drag(ToolId::Rectangle, {{400, 300}, {500, 380}});
+    f.ed.selectAll();
+    f.ed.convertSelectionToSymbol("Box", SymbolType::MovieClip, 4);
+    f.ed.clearSelection();
+    // Drag the body: moves.
+    f.drag(ToolId::FreeTransform, {{450, 340}, {480, 360}, {550, 400}});
+    Rect b = f.ed.selectionBounds();
+    CHECK(std::abs(b.center().x - 550) < 2 && std::abs(b.center().y - 400) < 2);
+    CHECK(!f.ed.hasPreview());
+    // Drag the right edge handle: scales the width, the left edge stays.
+    const double left = b.x0, right = b.x1, mid = b.center().y;
+    f.drag(ToolId::FreeTransform, {{right, mid}, {right + 30, mid}, {right + 100, mid}});
+    b = f.ed.selectionBounds();
+    CHECK(std::abs(b.x0 - left) < 2 && std::abs(b.x1 - (right + 100)) < 3);
+    // Undo restores the previous step, not the original position.
+    f.ed.undoStack()->undo();
+    const auto& els = f.ed.currentLayer()->keyAt(0)->elements;
+    CHECK(els.size() == 1 && std::abs(elementBounds(f.ed.doc(), *els.back()).center().x - 550) < 2);
+}
+
+VX_TEST(loop_range_playback)
+{
+    Fixture f;
+    f.ed.setFrame(9);
+    f.ed.insertKeyframe(false); // ten frames
+    const Document& d = f.ed.doc();
+    f.ed.setStageSettings(d.width, d.height, 100, d.background);
+    auto playFor = [&](int ms, std::vector<int>& frames) {
+        frames.clear();
+        auto c = QObject::connect(&f.ed, &Editor::frameChanged, [&](int fr) { frames.push_back(fr); });
+        f.ed.setPlaying(true);
+        QElapsedTimer t;
+        t.start();
+        while (t.elapsed() < ms && f.ed.isPlaying()) QApplication::processEvents(QEventLoop::AllEvents, 5);
+        f.ed.setPlaying(false);
+        QObject::disconnect(c);
+    };
+    // Off by default: playback stops on the last frame.
+    CHECK(!f.ed.loopPlayback());
+    std::vector<int> frames;
+    f.ed.setFrame(6);
+    playFor(2000, frames);
+    CHECK(f.ed.frame() == 9 && !frames.empty() && frames.back() == 9);
+    // With frames 3-6 selected the loop plays exactly those, starting inside.
+    FrameSelection sel;
+    sel.layerFrom = sel.layerTo = 0;
+    sel.frameFrom = 2;
+    sel.frameTo = 5;
+    f.ed.setFrameSelection(sel);
+    f.ed.setLoopPlayback(true);
+    CHECK(f.ed.loopStart() == 2 && f.ed.loopEnd() == 5);
+    f.ed.setFrame(0);
+    playFor(250, frames);
+    CHECK(frames.size() > 6);
+    bool inside = true, wrapped = false;
+    for (size_t i = 0; i < frames.size(); ++i) {
+        inside &= frames[i] >= 2 && frames[i] <= 5;
+        if (i > 0 && frames[i - 1] == 5 && frames[i] == 2) wrapped = true;
+    }
+    CHECK(inside && wrapped);
+    // The range follows edits and reaches the end when dragged there.
+    f.ed.setLoopRange(7, 42);
+    CHECK(f.ed.loopStart() == 7 && f.ed.loopEnd() == 9);
 }
 
 VX_TEST(main_window_smoke)

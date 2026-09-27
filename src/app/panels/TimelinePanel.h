@@ -49,7 +49,9 @@ protected:
     void resizeEvent(QResizeEvent*) override;
 
 private:
-    enum class Drag { None, Scrub, Select, MoveFrames, MoveLayer };
+    enum class Drag { None, Scrub, Select, MoveFrames, MoveLayer, LoopStart, LoopEnd, LoopMove };
+    /// Part of the loop bracket on the ruler under `pos`, or Drag::None.
+    Drag loopPartAt(QPointF pos) const;
     enum class Toggle { None, Visible, Lock, Outline, Expand };
     void rebuildRows();
     int rowAt(double y) const;          ///< index into m_rows, -1 if none
@@ -73,6 +75,7 @@ private:
     int m_layersW = 236;
     int m_scrollX = 0, m_scrollY = 0;
     Drag m_drag = Drag::None;
+    int m_loopGrab = 0; ///< frame offset of the pointer in the loop range when moving it
     QPointF m_pressPos;
     int m_pressRow = -1, m_pressFrame = -1;
     int m_hoverRow = -1;

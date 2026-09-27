@@ -44,6 +44,7 @@ TimelineView::TimelineView(Editor* editor, ActionLookup actions, QWidget* parent
     connect(m_ed, &Editor::contextChanged, this, refresh);
     connect(m_ed, &Editor::layerChanged, this, qOverload<>(&QWidget::update));
     connect(m_ed, &Editor::frameSelectionChanged, this, qOverload<>(&QWidget::update));
+    connect(m_ed, &Editor::loopChanged, this, qOverload<>(&QWidget::update));
     connect(m_ed, &Editor::frameChanged, this, [this]() {
         if (m_ed->isPlaying()) ensurePlayheadVisible();
         update();
@@ -157,6 +158,20 @@ void TimelineView::paintRuler(QPainter& p)
             p.setPen(pal.text2);
             p.drawText(QRectF(x - 10, 2, m_cellW + 20, m_rulerH - 10), Qt::AlignHCenter | Qt::AlignVCenter, QString::number(f + 1));
         }
+    }
+    // Loop range: a bracket along the top of the ruler (dragged by its ends
+    // or its middle).
+    if (m_ed->loopPlayback()) {
+        const double x0 = frameX(m_ed->loopStart()), x1 = frameX(m_ed->loopEnd()) + m_cellW;
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(ui::withAlpha(pal.accent, 40));
+        p.drawRect(QRectF(x0, 0, x1 - x0, m_rulerH));
+        p.setBrush(pal.accent);
+        p.drawRoundedRect(QRectF(x0, 0, x1 - x0, 5), 2, 2);
+        p.drawRect(QRectF(x0, 0, 3, m_rulerH - 4));
+        p.drawRect(QRectF(x1 - 3, 0, 3, m_rulerH - 4));
+        p.setRenderHint(QPainter::Antialiasing, false);
     }
     // Playhead pill.
     const int f = m_ed->frame();
@@ -394,6 +409,9 @@ void TimelineView::mousePressEvent(QMouseEvent* e)
     if (m_ed->isPlaying()) m_ed->setPlaying(false);
     if (pos.y() < m_rulerH) {
         if (pos.x() > m_layersW) {
+            m_drag = loopPartAt(pos);
+            if (m_drag == Drag::LoopMove) m_loopGrab = frameAt(pos.x()) - m_ed->loopStart();
+            if (m_drag != Drag::None) return;
             m_drag = Drag::Scrub;
             m_ed->setFrame(frameAt(pos.x()));
         }
@@ -466,9 +484,25 @@ void TimelineView::mousePressEvent(QMouseEvent* e)
     m_ed->setFrame(f);
 }
 
+TimelineView::Drag TimelineView::loopPartAt(QPointF pos) const
+{
+    if (!m_ed->loopPlayback() || pos.y() >= m_rulerH || pos.x() <= m_layersW) return Drag::None;
+    const double x0 = frameX(m_ed->loopStart()), x1 = frameX(m_ed->loopEnd()) + m_cellW;
+    if (std::abs(pos.x() - x0) <= 5) return Drag::LoopStart;
+    if (std::abs(pos.x() - x1) <= 5) return Drag::LoopEnd;
+    if (pos.y() <= 9 && pos.x() > x0 && pos.x() < x1) return Drag::LoopMove;
+    return Drag::None;
+}
+
 void TimelineView::mouseMoveEvent(QMouseEvent* e)
 {
     const QPointF pos = e->position();
+    if (m_drag == Drag::None) {
+        const Drag part = loopPartAt(pos);
+        setCursor(part == Drag::LoopStart || part == Drag::LoopEnd ? Qt::SizeHorCursor
+                  : part == Drag::LoopMove                         ? Qt::OpenHandCursor
+                                                                   : Qt::ArrowCursor);
+    }
     const int hr = pos.x() < m_layersW ? rowAt(pos.y()) : -1;
     if (hr != m_hoverRow) {
         m_hoverRow = hr;
@@ -476,6 +510,15 @@ void TimelineView::mouseMoveEvent(QMouseEvent* e)
     }
     switch (m_drag) {
     case Drag::Scrub: m_ed->setFrame(frameAt(pos.x())); break;
+    case Drag::LoopStart: m_ed->setLoopRange(std::min(frameAt(pos.x()), m_ed->loopEnd()), m_ed->loopEnd()); break;
+    case Drag::LoopEnd: m_ed->setLoopRange(m_ed->loopStart(), std::max(frameAt(pos.x()), m_ed->loopStart())); break;
+    case Drag::LoopMove: {
+        const int len = m_ed->loopEnd() - m_ed->loopStart();
+        const int last = std::max(0, m_ed->timeline().frameCount() - 1);
+        const int from = std::clamp(frameAt(pos.x()) - m_loopGrab, 0, std::max(0, last - len));
+        m_ed->setLoopRange(from, from + len);
+        break;
+    }
     case Drag::Select: {
         const int row = std::clamp(int((pos.y() - m_rulerH + m_scrollY) / m_rowH), 0, std::max(0, int(m_rows.size()) - 1));
         if (m_rows.empty() || m_pressRow < 0) break;
@@ -775,7 +818,13 @@ TimelinePanel::TimelinePanel(Editor* editor, ActionLookup actions, QWidget* pare
     m_loop = transportButton("loop", tr("Loop playback"), this);
     m_loop->setCheckable(true);
     m_loop->setChecked(m_ed->loopPlayback());
+    m_loop->setToolTip(tr("Loop playback (Alt+Shift+L): drag the bracket on the ruler to choose the frames; "
+                          "with frames selected, the loop takes the selection"));
     connect(m_loop, &QToolButton::toggled, m_ed, &Editor::setLoopPlayback);
+    connect(m_ed, &Editor::loopChanged, this, [this]() {
+        const QSignalBlocker block(m_loop);
+        m_loop->setChecked(m_ed->loopPlayback());
+    });
     header->addWidget(m_loop);
     header->addSpacing(14);
     m_onion = transportButton("onion", tr("Onion skin (Alt+Shift+O)"), this);

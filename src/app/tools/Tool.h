@@ -49,6 +49,8 @@ public:
     virtual QCursor cursor() const { return Qt::CrossCursor; }
     /// True while a drag/stroke is in progress.
     virtual bool busy() const { return false; }
+    /// True while finished work is still being computed in the background.
+    virtual bool hasPendingWork() const { return false; }
 
 protected:
     QPointF toWidget(Vec2 p) const;

@@ -6,7 +6,7 @@ the ones below it:
 ```
  vertexa (executable)
    └─ vx_app     Qt Widgets: Editor, StageView, tools, panels, dialogs
-       └─ vx_render   rasteriser, blend modes, filters, renderer, SVG
+       └─ vx_render   rasteriser, blend modes, filters, renderer (CPU / OpenGL), SVG
            └─ vx_core     document model, shape graph, timelines, tweens, .vtx, FLA import
                └─ vx_geom     exact 2D geometry (standard C++ only)
 ```
@@ -186,7 +186,29 @@ object.
   masks, outline mode, onion skins and the edit-in-place dimming. A movie clip
   with filters or a blend mode is rendered into a buffer bounded by its
   symbol bounds plus the filter margin, filtered, colour-transformed and then
-  composited.
+  composited. It draws through a `Surface`, which decides where the pixels
+  are made: `CpuSurface` wraps a `QImage` and uses the rasteriser above,
+  `GlSurface` draws on the GPU.
+- `GlRenderer` — the OpenGL path (3.3 core, or ES 3.0), on an offscreen
+  context of the GUI thread:
+  - fills and strokes use *stencil-then-cover* in a multisampled framebuffer:
+    triangle fans of each contour count the non-zero winding in the stencil
+    buffer (two-sided increment / decrement), then one quad paints the
+    covered samples with the fill colour or a gradient (a 256-entry ramp
+    texture) and resets the stencil. Neighbouring fills are flattened from
+    the same edges, so every sample belongs to exactly one of them and no
+    seam shows;
+  - flattened geometry is cached per shape in shape space (half-octave scale
+    buckets, vertex buffers, 256 MB LRU budget) and placed by the vertex
+    shader, so panning and playback reuse it; fans are split into short
+    chunks to keep stencil overdraw low;
+  - isolated layers are pooled framebuffers; blend modes, masks and colour
+    transforms are shaders that port the CPU formulas (fixed-function
+    blending for Normal / Layer / Alpha / Erase). Filters still run on the
+    CPU on the filtered instance's own pixels;
+  - `renderAccelerated()` falls back to the CPU renderer when there is no
+    usable context, when the driver is a software one (llvmpipe, SwiftShader…
+    unless `VERTEXA_GPU=force`) or when GPU rendering is turned off.
 - `SvgExport` — writes a frame as SVG with exact cubic paths and SVG filter
   equivalents.
 
@@ -220,7 +242,9 @@ outline, merge/erase/bucket semantics); `test_core` covers timelines, tweens,
 symbols and serialization; `test_brush` the vector brushes; `test_fla` the
 OLE2 and ZIP readers and both FLA importers on synthetic files (set
 `VERTEXA_FLA_SAMPLES` to a folder of real `.fla` files to import those too);
-`test_render` compares rendered pixels, filters included; `test_app`
+`test_render` compares rendered pixels, filters included; `test_gpu`
+(opt-in with `VERTEXA_TEST_GPU=1`, CI runs it under Xvfb with Mesa) renders
+the same scenes on the GPU and the CPU and compares them; `test_app`
 drives the real `StageView` with synthetic mouse events (drawing, erasing,
 selecting, bending, tweening, entering symbols) on the offscreen platform.
 

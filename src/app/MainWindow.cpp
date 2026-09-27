@@ -14,6 +14,7 @@
 
 #include "core/Serialize.h"
 #include "core/io/FlaImport.h"
+#include "render/GlRenderer.h"
 #include "render/Renderer.h"
 #include "render/SvgExport.h"
 
@@ -33,6 +34,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QSettings>
+#include <QTimer>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QToolButton>
@@ -83,6 +85,7 @@ MainWindow::MainWindow(Editor* editor, QWidget* parent) : QMainWindow(parent), m
     updateTitle();
     updateBreadcrumb();
     rebuildRecentMenu();
+    QTimer::singleShot(0, this, &MainWindow::reportRenderer);
 }
 
 QAction* MainWindow::add(const QString& name, const QString& text, const QKeySequence& key, std::function<void()> fn, const QString& icon)
@@ -161,6 +164,12 @@ void MainWindow::createActions()
     addCheck("onionSkin", tr("Onion Skin"), QKeySequence("Alt+Shift+O"), false, [ed](bool b) { ed->setOnion(b, ed->onionOutline); });
     addCheck("onionOutline", tr("Onion Skin Outlines"), {}, false, [ed](bool b) { ed->setOnion(ed->onionSkin || b, b); });
     addCheck("darkTheme", tr("Dark Theme"), {}, Theme::isDark(), [](bool b) { Theme::setDark(b); });
+    addCheck("gpuRendering", tr("GPU Rendering"), {}, GlRenderer::enabled(), [this](bool b) {
+        QSettings().setValue("render/gpu", b);
+        GlRenderer::setEnabled(b);
+        m_stage->invalidate();
+        reportRenderer();
+    });
     connect(m_ed, &Editor::onionChanged, this, [this] {
         const QSignalBlocker b1(m_actions["onionSkin"]), b2(m_actions["onionOutline"]);
         m_actions["onionSkin"]->setChecked(m_ed->onionSkin);
@@ -246,7 +255,11 @@ void MainWindow::createActions()
     add("lastFrame", tr("Go to Last Frame"), QKeySequence("Shift+."), [ed] { ed->setFrame(ed->timeline().frameCount() - 1); }, "last");
     add("prevFrame", tr("Previous Frame"), QKeySequence(Qt::Key_Comma), [ed] { ed->setFrame(ed->frame() - 1); }, "prev");
     add("nextFrame", tr("Next Frame"), QKeySequence(Qt::Key_Period), [ed] { ed->setFrame(ed->frame() + 1); }, "next");
-    addCheck("loop", tr("Loop Playback"), {}, true, [ed](bool b) { ed->setLoopPlayback(b); });
+    addCheck("loop", tr("Loop Playback"), QKeySequence("Alt+Shift+L"), ed->loopPlayback(), [ed](bool b) { ed->setLoopPlayback(b); });
+    connect(ed, &Editor::loopChanged, this, [this]() {
+        const QSignalBlocker block(m_actions["loop"]);
+        m_actions["loop"]->setChecked(m_ed->loopPlayback());
+    });
     addCheck("simpleButtons", tr("Enable Simple &Buttons"), QKeySequence("Ctrl+Alt+B"), false, [ed](bool b) { ed->setSimpleButtons(b); });
 
     // Tools
@@ -338,6 +351,7 @@ void MainWindow::createMenus()
     view->addAction(a("onionSkin"));
     view->addAction(a("onionOutline"));
     view->addSeparator();
+    view->addAction(a("gpuRendering"));
     view->addAction(a("darkTheme"));
 
     QMenu* insert = menuBar()->addMenu(tr("&Insert"));
@@ -587,7 +601,7 @@ bool MainWindow::importFlaFile(const QString& path)
                                 .arg(report.symbols)
                                 .arg(report.layers)
                                 .arg(report.keyframes);
-    m_stage->showToast(tr("Imported %1").arg(QFileInfo(path).fileName()));
+    m_ed->notify(tr("Imported %1").arg(QFileInfo(path).fileName()));
     statusBar()->showMessage(summary, 8000);
     if (!report.warnings.isEmpty()) {
         QStringList unique;
@@ -749,6 +763,13 @@ void MainWindow::closeEvent(QCloseEvent* e)
     s.setValue("ui/geometry", saveGeometry());
     s.setValue("ui/state", saveState(2));
     e->accept();
+}
+
+void MainWindow::reportRenderer()
+{
+    if (GlRenderer* gpu = GlRenderer::instance()) m_ed->notify(tr("Rendering on the GPU: %1").arg(gpu->deviceName()));
+    else if (GlRenderer::enabled()) m_ed->notify(tr("No suitable GPU (OpenGL 3.3): rendering on the CPU"));
+    else m_ed->notify(tr("Rendering on the CPU"));
 }
 
 } // namespace vx::app

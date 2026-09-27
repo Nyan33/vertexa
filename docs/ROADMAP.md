@@ -20,6 +20,8 @@
 - [x] Button symbols: Up / Over / Down / Hit, Enable Simple Buttons
 - [x] 9-slice scaling with exact curve splitting
 - [x] Library folders
+- [x] GPU rendering through OpenGL with a CPU fallback
+- [x] Loop range for playback
 - [x] `.vtx` files, PNG sequence / SVG / video export
 
 ## Next
@@ -35,6 +37,6 @@
 - **Scenes** panel (the model already supports several scenes)
 - **FLA import, next steps**: bitmaps, text, sounds and shape tweens of binary files; XFL export
 - **Import**: SVG, bitmaps; **export**: SWF, animated GIF / APNG, sprite sheets
-- **Performance**: tiled and threaded rendering, GPU compositing of layers
+- **Performance**: filters on the GPU, tiled and threaded CPU rendering, a Vulkan / Metal backend
 - **Localisation** (Russian first) and customisable shortcuts
-- Packages for Windows, macOS and Linux (AppImage / Flatpak)
+- Flatpak, signed and notarised packages

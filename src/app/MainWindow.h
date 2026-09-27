@@ -27,6 +27,7 @@ protected:
     void closeEvent(QCloseEvent*) override;
 
 private:
+    void reportRenderer();
     QAction* add(const QString& name, const QString& text, const QKeySequence& key, std::function<void()> fn,
                  const QString& icon = {});
     QAction* addCheck(const QString& name, const QString& text, const QKeySequence& key, bool on, std::function<void(bool)> fn);

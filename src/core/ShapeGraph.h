@@ -69,6 +69,9 @@ public:
 
     /// Render data (chained loops per fill, chains per stroke). Cached.
     const ShapeRenderData& renderData() const;
+    /// The same, shared: renderers may cache work per render data (GPU
+    /// buffers) and tell from a weak reference when it is gone.
+    std::shared_ptr<const ShapeRenderData> renderDataPtr() const;
     /// Planar topology (faces) of this shape. Layer 0 holds the fill labels.
     /// Cached; used for hit testing and selection.
     const Arrangement& topology() const;

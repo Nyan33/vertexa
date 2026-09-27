@@ -4,6 +4,8 @@
 // graphic symbol sync), shapes and morphs.
 #pragma once
 
+#include "Surface.h"
+
 #include "core/Evaluate.h"
 #include "core/Scale9.h"
 
@@ -41,6 +43,8 @@ public:
 
     /// Render `frame` of `tl` into `target` (premultiplied ARGB32) through `view`.
     void render(QImage& target, const Timeline& tl, int frame, const Affine& view, const ColorTransform& ct = {});
+    /// Same on any surface (CPU image or GPU framebuffer).
+    void render(Surface& target, const Timeline& tl, int frame, const Affine& view, const ColorTransform& ct = {});
     /// Render loose elements (e.g. a floating selection) into `target`.
     void renderItems(QImage& target, const std::vector<EvalItem>& items, const Affine& view, const ColorTransform& ct = {});
 
@@ -73,10 +77,10 @@ private:
         Affine sliceBase;
         Affine toSymbol;
     };
-    void renderTimeline(QImage& target, const Timeline& tl, int frame, const Ctx& c);
-    void renderLayerItems(QImage& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c);
-    void renderList(QImage& target, const std::vector<EvalItem>& items, const Ctx& c);
-    void renderElement(QImage& target, const EvalItem& item, const Ctx& c, bool onPath = false);
+    void renderTimeline(Surface& target, const Timeline& tl, int frame, const Ctx& c);
+    void renderLayerItems(Surface& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c);
+    void renderList(Surface& target, const std::vector<EvalItem>& items, const Ctx& c);
+    void renderElement(Surface& target, const EvalItem& item, const Ctx& c, bool onPath = false);
     bool layerHidden(const Timeline& tl, int index) const;
 
     const Document& m_doc;

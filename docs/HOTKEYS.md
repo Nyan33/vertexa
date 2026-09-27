@@ -80,6 +80,7 @@ Crop) are in the Modify menu without a default key, as in Animate.
 | Action | Key |
 |---|---|
 | Play / Stop | `Enter` |
+| Loop Playback | `Alt+Shift+L` (drag the bracket on the ruler to choose the frames; with frames selected, the loop takes the selection) |
 | Previous / Next frame | `,` / `.` |
 | First / Last frame | `Shift+,` / `Shift+.` |
 | Insert Frame | `F5` |

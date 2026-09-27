@@ -183,8 +183,15 @@ public:
 
     bool isPlaying() const { return m_playing; }
     void setPlaying(bool play);
+    /// Loop playback (Control > Loop Playback): plays the loop range over
+    /// and over; without it playback stops on the last frame.
     bool loopPlayback() const { return m_loop; }
+    /// Turning the loop on with several frames selected loops those frames.
     void setLoopPlayback(bool on);
+    /// Loop range, inclusive and clamped to the current timeline.
+    int loopStart() const;
+    int loopEnd() const;
+    void setLoopRange(int from, int to);
 
     // Onion skin
     bool onionSkin = false;
@@ -316,6 +323,7 @@ signals:
     void playingChanged(bool playing);
     void onionChanged();
     void simpleButtonsChanged(bool on);
+    void loopChanged();
     void message(const QString& text);
     void pathChanged();
 
@@ -348,7 +356,8 @@ private:
     ToolId m_tool = ToolId::Brush;
     ToolSettings m_settings;
     bool m_playing = false;
-    bool m_loop = true;
+    bool m_loop = false;
+    int m_loopStart = 0, m_loopEnd = -1; ///< -1: to the last frame
     QTimer* m_timer = nullptr;
     std::vector<Keyframe> m_frameClipboard;
     int m_pasteCount = 0;

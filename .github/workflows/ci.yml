@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build qt6-base-dev libgl1-mesa-dev
+          sudo apt-get install -y --no-install-recommends ninja-build qt6-base-dev libgl1-mesa-dev libgl1-mesa-dri xvfb xauth
       - name: Configure
         env:
           CC: ${{ matrix.cc }}
@@ -48,7 +48,10 @@ jobs:
       - name: Build
         run: cmake --build build
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        # Under Xvfb with Mesa: the GPU renderer is compared with the CPU one.
+        env:
+          VERTEXA_TEST_GPU: 1
+        run: xvfb-run -a ctest --test-dir build --output-on-failure
       - name: Screenshot
         run: QT_QPA_PLATFORM=offscreen ./build/src/app/vertexa --demo --screenshot vertexa-linux.png --frame 12
       - uses: actions/upload-artifact@v4
@@ -70,7 +73,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build g++-12 libgl1-mesa-dev libegl1 libfuse2 \
+          sudo apt-get install -y --no-install-recommends ninja-build g++-12 libgl1-mesa-dev libgl1-mesa-dri libegl1 libfuse2 xvfb xauth \
             libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
             libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
       - name: Configure
@@ -81,7 +84,9 @@ jobs:
       - name: Build
         run: cmake --build build
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        env:
+          VERTEXA_TEST_GPU: 1
+        run: xvfb-run -a ctest --test-dir build --output-on-failure
       - name: Package
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
