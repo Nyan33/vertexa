@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Vertexa
+GenericName=Vector Animation Studio
+Comment=Open-source 2D vector animation studio
+Exec=vertexa %F
+Icon=vertexa
+Terminal=false
+Categories=Graphics;VectorGraphics;2DGraphics;
+MimeType=application/x-vertexa;
+Keywords=animation;vector;flash;animate;drawing;

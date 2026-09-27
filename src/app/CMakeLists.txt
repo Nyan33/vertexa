@@ -24,6 +24,20 @@ target_compile_definitions(vx_app PUBLIC VERTEXA_VERSION="${PROJECT_VERSION}")
 
 qt_add_executable(vertexa WIN32 MACOSX_BUNDLE main.cpp)
 
+# Application icon: Windows resource, macOS bundle icon, window icon (qrc).
+if(WIN32)
+    target_sources(vertexa PRIVATE "${PROJECT_SOURCE_DIR}/resources/vertexa.rc")
+elseif(APPLE)
+    set(VERTEXA_ICNS "${PROJECT_SOURCE_DIR}/resources/icons/vertexa.icns")
+    set_source_files_properties("${VERTEXA_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(vertexa PRIVATE "${VERTEXA_ICNS}")
+endif()
+qt_add_resources(vertexa "icons"
+    PREFIX "/icons"
+    BASE "${PROJECT_SOURCE_DIR}/resources/icons"
+    FILES "${PROJECT_SOURCE_DIR}/resources/icons/vertexa-256.png"
+)
+
 qt_add_resources(vertexa "fonts"
     PREFIX "/fonts"
     BASE "${PROJECT_SOURCE_DIR}/resources/fonts"
@@ -38,9 +52,16 @@ set_target_properties(vertexa PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "Vertexa"
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.vertexa.Vertexa"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_ICON_FILE vertexa.icns
 )
 
 install(TARGETS vertexa
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
 )
+if(UNIX AND NOT APPLE)
+    install(FILES "${PROJECT_SOURCE_DIR}/packaging/linux/vertexa.desktop" DESTINATION share/applications)
+    install(FILES "${PROJECT_SOURCE_DIR}/resources/icons/vertexa.svg" DESTINATION share/icons/hicolor/scalable/apps)
+    install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" "${PROJECT_SOURCE_DIR}/resources/fonts/OFL.txt" DESTINATION share/doc/vertexa)
+endif()

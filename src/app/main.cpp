@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDockWidget>
+#include <QIcon>
 #include <QScreen>
 #include <QSettings>
 #include <QTimer>
@@ -39,6 +40,9 @@ int main(int argc, char** argv)
     QApplication app(newArgc, args.data());
     app.setApplicationVersion(VERTEXA_VERSION);
     app.setApplicationDisplayName("Vertexa");
+    app.setWindowIcon(QIcon(":/icons/vertexa-256.png"));
+    // Lets Wayland / X11 desktops match windows with vertexa.desktop.
+    QGuiApplication::setDesktopFileName("vertexa");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("Vertexa — open-source 2D vector animation studio");

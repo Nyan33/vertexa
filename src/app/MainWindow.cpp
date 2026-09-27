@@ -24,6 +24,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenuBar>
@@ -52,7 +53,7 @@ const char* kFlaFilter = "Flash / Animate document (*.fla *.xfl);;XFL folder doc
 
 MainWindow::MainWindow(Editor* editor, QWidget* parent) : QMainWindow(parent), m_ed(editor)
 {
-    setWindowIcon(ui::icon("brush"));
+    setWindowIcon(QIcon(":/icons/vertexa-256.png"));
     setDockNestingEnabled(true);
     setCentralWidget(createStageArea());
     createActions();

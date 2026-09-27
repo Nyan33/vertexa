@@ -124,6 +124,22 @@ come across. A report lists anything that could not be imported exactly
   <img src="docs/images/library.png" width="49%"/> <img src="docs/images/light.png" width="49%"/>
 </p>
 
+## Download
+
+Ready-to-run builds for Windows (x64 `.zip`), macOS (Apple silicon and Intel,
+`.dmg`) and Linux (x86_64 `.AppImage`) are made by CI:
+
+- **[Nightly build](https://github.com/Nyan33/vertexa/releases/tag/nightly)** —
+  the latest `main`, refreshed after every merge;
+- **[Releases](https://github.com/Nyan33/vertexa/releases)** — versions built
+  from `v*` tags;
+- every pull request run keeps its packages as artifacts for 30 days (open the
+  run under *Actions*, then *Artifacts*; downloading needs a GitHub login).
+
+The builds are not code-signed yet. On macOS, open the app the first time with
+right-click → *Open*; on Windows choose *More info → Run anyway* if SmartScreen
+asks; on Linux run `chmod +x` on the AppImage.
+
 ## Building
 
 Requirements: a C++20 compiler (GCC 11+, Clang 14+, MSVC 2022), CMake 3.21+,
