@@ -241,4 +241,65 @@ VX_TEST(serialization_roundtrip)
     CHECK(other.symbols.size() >= 1);
 }
 
+VX_TEST(layer_drag_keeps_children)
+{
+    Timeline tl;
+    auto layer = [&](uint32_t id, LayerType type, uint32_t parent) {
+        Layer l;
+        l.id = id;
+        l.name = "L" + std::to_string(id);
+        l.type = type;
+        l.parentId = parent;
+        l.normalize();
+        tl.layers.push_back(l);
+    };
+    layer(1, LayerType::Normal, 0);
+    layer(2, LayerType::Folder, 0);
+    layer(3, LayerType::Normal, 2);
+    layer(4, LayerType::Mask, 2);
+    layer(5, LayerType::Normal, 4);
+    layer(6, LayerType::Normal, 0);
+    auto order = [&] {
+        std::string s;
+        for (const Layer& l : tl.layers) s += std::to_string(l.id);
+        return s;
+    };
+    CHECK(layerBlockSize(tl, 1) == 3);
+    CHECK(layerBlockSize(tl, 3) == 1);
+    CHECK(moveLayer(tl, 1, 2) == -1); // onto itself
+
+    // The folder travels with everything inside it.
+    CHECK(moveLayer(tl, 1, 6) == 2);
+    CHECK(order() == "162345");
+    CHECK(tl.layers[2].parentId == 0);
+    CHECK(tl.maskOf(tl.layerIndex(5)) != nullptr);
+
+    // Dropped right under the expanded folder: goes inside.
+    CHECK(moveLayer(tl, 0, 3) == 2);
+    CHECK(order() == "621345");
+    CHECK(tl.layers[2].parentId == 2);
+
+    // Dragged back to the top: leaves the folder.
+    CHECK(moveLayer(tl, 2, 0) == 0);
+    CHECK(tl.layers[0].parentId == 0);
+
+    // Under a mask a layer becomes masked, a mask never nests into a mask.
+    CHECK(moveLayer(tl, 1, 5) == 4);
+    CHECK(order() == "123465");
+    CHECK(tl.maskOf(4) != nullptr);
+    Layer m2;
+    m2.id = 7;
+    m2.type = LayerType::Mask;
+    m2.normalize();
+    tl.layers.push_back(m2);
+    CHECK(moveLayer(tl, 6, 4) == 4);
+    CHECK(tl.layers[4].parentId == 2);
+
+    // A collapsed folder hides its children: dropping below it stays outside.
+    tl.layers[tl.layerIndex(2)].expanded = false;
+    const int top = tl.layerIndex(1);
+    CHECK(moveLayer(tl, top, int(tl.layers.size())) == int(tl.layers.size()) - 1);
+    CHECK(tl.layers.back().parentId == 0);
+}
+
 VX_TEST_MAIN()

@@ -216,4 +216,68 @@ void moveFrames(Layer& l, int from, int to, int delta)
     pasteFrames(l, std::max(0, from + delta), frames, true);
 }
 
+namespace {
+
+bool isAncestor(const Timeline& tl, uint32_t ancestor, const Layer& l)
+{
+    uint32_t p = l.parentId;
+    for (int guard = 0; p != 0 && guard < 64; ++guard) {
+        if (p == ancestor) return true;
+        const Layer* pl = tl.layerById(p);
+        if (!pl) break;
+        p = pl->parentId;
+    }
+    return false;
+}
+
+bool isContainer(LayerType t) { return t == LayerType::Folder || t == LayerType::Mask || t == LayerType::Guide; }
+
+} // namespace
+
+int layerBlockSize(const Timeline& tl, int index)
+{
+    if (index < 0 || index >= int(tl.layers.size())) return 0;
+    const uint32_t id = tl.layers[index].id;
+    int n = 0;
+    while (index + 1 + n < int(tl.layers.size()) && isAncestor(tl, id, tl.layers[index + 1 + n])) ++n;
+    return n;
+}
+
+int moveLayer(Timeline& tl, int from, int before)
+{
+    const int count = int(tl.layers.size());
+    if (from < 0 || from >= count) return -1;
+    before = std::clamp(before, 0, count);
+    const int n = 1 + layerBlockSize(tl, from);
+    if (before >= from && before <= from + n) return -1; // onto itself
+
+    const std::vector<Layer> block(tl.layers.begin() + from, tl.layers.begin() + from + n);
+    tl.layers.erase(tl.layers.begin() + from, tl.layers.begin() + from + n);
+    const int at = before > from ? before - n : before;
+    tl.layers.insert(tl.layers.begin() + at, block.begin(), block.end());
+
+    // The parent follows from the nearest row above that the panel shows.
+    Layer& moved = tl.layers[at];
+    int above = at - 1;
+    while (above >= 0 && tl.isCollapsed(above)) --above;
+    uint32_t parent = 0;
+    if (above >= 0) {
+        const Layer& a = tl.layers[above];
+        const bool open = isContainer(a.type) && (a.type != LayerType::Folder || a.expanded);
+        parent = open ? a.id : a.parentId;
+    }
+    const bool maskOrGuide = moved.type == LayerType::Mask || moved.type == LayerType::Guide;
+    for (int guard = 0; parent != 0 && guard < 64; ++guard) {
+        const Layer* p = tl.layerById(parent);
+        if (!p) {
+            parent = 0;
+            break;
+        }
+        if (!maskOrGuide || p->type == LayerType::Folder) break;
+        parent = p->parentId;
+    }
+    moved.parentId = parent;
+    return at;
+}
+
 } // namespace vx

@@ -267,7 +267,8 @@ public:
     void deleteLayer();
     void renameLayer(int index, const QString& name);
     void setLayerProperty(int index, const std::function<void(Layer&)>& fn, const QString& label);
-    void moveLayer(int from, int to);
+    /// Drag a layer (with its children) before the layer at `before`.
+    void moveLayer(int from, int before);
     void toggleOthersLocked(int index);
     void toggleOthersHidden(int index);
 

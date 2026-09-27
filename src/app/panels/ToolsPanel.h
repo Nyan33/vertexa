@@ -18,6 +18,7 @@ class ToolsPanel : public QWidget {
 public:
     explicit ToolsPanel(Editor* editor, QWidget* parent = nullptr);
     QSize sizeHint() const override;
+    QSize minimumSizeHint() const override { return {56, 120}; }
     static QString shortcutFor(ToolId id);
     static QString iconFor(ToolId id);
 

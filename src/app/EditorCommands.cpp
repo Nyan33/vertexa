@@ -1049,19 +1049,15 @@ void Editor::setLayerProperty(int index, const std::function<void(Layer&)>& fn, 
     });
 }
 
-void Editor::moveLayer(int from, int to)
+void Editor::moveLayer(int from, int before)
 {
-    if (from == to) return;
+    int moved = -1;
     edit(tr("Move Layer"), [&](Document& d) {
-        Timeline& tl = mutableTimeline(d);
-        if (from < 0 || from >= int(tl.layers.size())) return false;
-        to = std::clamp(to, 0, int(tl.layers.size()) - 1);
-        Layer l = tl.layers[from];
-        tl.layers.erase(tl.layers.begin() + from);
-        tl.layers.insert(tl.layers.begin() + to, l);
-        return true;
+        moved = vx::moveLayer(mutableTimeline(d), from, before);
+        return moved >= 0;
     });
-    m_layer = std::clamp(to, 0, int(timeline().layers.size()) - 1);
+    if (moved < 0) return;
+    m_layer = moved;
     emit layerChanged(m_layer);
 }
 

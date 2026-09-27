@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDockWidget>
 #include <QScreen>
 #include <QSettings>
 #include <QTimer>
@@ -46,12 +47,21 @@ int main(int argc, char** argv)
     QCommandLineOption demo("demo", "Open the demo scene.");
     QCommandLineOption screenshot("screenshot", "Save a screenshot of the window to <file> and quit.", "file");
     QCommandLineOption frameOpt("frame", "Frame to show (with --screenshot).", "n", "1");
+    QCommandLineOption stateOpt("state", "UI state for --screenshot: instance, edit, brushes, light, library.", "name");
+    parser.addOption(stateOpt);
     parser.addOption(demo);
     parser.addOption(screenshot);
     parser.addOption(frameOpt);
     parser.addPositionalArgument("file", "Document to open (.vtx).");
     parser.process(app);
 
+    if (parser.isSet(screenshot)) {
+        // Deterministic layout for screenshots.
+        QSettings s;
+        s.remove("ui/state");
+        s.remove("ui/geometry");
+        s.setValue("ui/dark", parser.value(stateOpt) != "light");
+    }
     vx::ui::Theme::init(app);
     vx::app::Editor editor;
     vx::app::MainWindow window(&editor);
@@ -65,9 +75,36 @@ int main(int argc, char** argv)
         const QString path = parser.value(screenshot);
         const int frame = std::max(1, parser.value(frameOpt).toInt()) - 1;
         window.resize(1600, 980);
-        QTimer::singleShot(600, &window, [&window, &editor, path, frame]() {
+        const QString state = parser.value(stateOpt);
+        QTimer::singleShot(600, &window, [&window, &editor, path, frame, state]() {
             window.stage()->fitStage();
             editor.setFrame(frame);
+            auto raise = [&window](const char* dock) {
+                if (auto* d = window.findChild<QDockWidget*>(dock)) d->raise();
+            };
+            auto selectLayerElement = [&editor](const char* layerName) {
+                const vx::Timeline& tl = editor.timeline();
+                for (int i = 0; i < int(tl.layers.size()); ++i)
+                    if (tl.layers[i].name == layerName) {
+                        editor.setLayerIndex(i);
+                        editor.setSelection({{tl.layers[i].id, 0}});
+                        return i;
+                    }
+                return -1;
+            };
+            if (state == "instance") {
+                selectLayerElement("Sun");
+                editor.setTool(vx::app::ToolId::FreeTransform);
+            } else if (state == "edit") {
+                const int li = selectLayerElement("Sun");
+                if (li >= 0) editor.enterInstance(li, 0);
+                editor.setTool(vx::app::ToolId::Brush);
+            } else if (state == "brushes") {
+                raise("brushes");
+                editor.setTool(vx::app::ToolId::PaintBrush);
+            } else if (state == "library") {
+                raise("library");
+            }
             QTimer::singleShot(600, &window, [&window, path]() {
                 window.grab().save(path);
                 QApplication::quit();

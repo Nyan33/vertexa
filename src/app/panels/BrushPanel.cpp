@@ -87,8 +87,8 @@ int PresetGrid::heightForWidth(int) const { return int((m_presets.size() + 1) / 
 
 QRectF PresetGrid::tile(int i) const
 {
-    const double w = (width() - 8) / 2.0;
-    return QRectF((i % 2) * (w + 8), (i / 2) * 76, w, 70);
+    const double w = (width() - 10) / 2.0;
+    return QRectF(1 + (i % 2) * (w + 8), (i / 2) * 76, w, 70);
 }
 
 void PresetGrid::resizeEvent(QResizeEvent*) { update(); }
@@ -149,7 +149,7 @@ BrushPanel::BrushPanel(Editor* editor, QWidget* parent) : QScrollArea(parent), m
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_content = new QWidget();
     m_layout = new QVBoxLayout(m_content);
-    m_layout->setContentsMargins(10, 8, 12, 12);
+    m_layout->setContentsMargins(10, 8, 16, 12);
     m_layout->setSpacing(8);
     m_layout->addWidget(new SectionTitle(tr("Brushes"), m_content));
     m_grid = new PresetGrid(m_ed, m_content);

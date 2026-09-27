@@ -364,6 +364,11 @@ void TimelineView::paintLayerColumn(QPainter& p)
             p.drawLine(QPointF(8, y), QPointF(m_layersW - 8, y));
         }
     }
+    if (m_drag == Drag::MoveLayer && m_dropRow == int(m_rows.size())) {
+        const double y = rowY(m_dropRow);
+        p.setPen(QPen(pal.accent, 2));
+        p.drawLine(QPointF(8, y), QPointF(m_layersW - 8, y));
+    }
     p.restore();
     p.setPen(QPen(pal.line, 1));
     p.drawLine(QPointF(m_layersW - 0.5, 0), QPointF(m_layersW - 0.5, height()));
@@ -517,9 +522,8 @@ void TimelineView::mouseReleaseEvent(QMouseEvent*)
     }
     if (d == Drag::MoveLayer && m_dropRow >= 0 && m_pressRow >= 0) {
         const int from = m_rows[m_pressRow];
-        int to = m_dropRow < int(m_rows.size()) ? m_rows[m_dropRow] : int(m_ed->timeline().layers.size());
-        if (to > from) --to;
-        if (to != from) m_ed->moveLayer(from, to);
+        const int before = m_dropRow < int(m_rows.size()) ? m_rows[m_dropRow] : int(m_ed->timeline().layers.size());
+        m_ed->moveLayer(from, before);
     }
     m_moveDelta = 0;
     m_dropRow = -1;

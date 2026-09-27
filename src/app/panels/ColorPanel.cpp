@@ -118,22 +118,27 @@ void SwatchGrid::leaveEvent(QEvent*)
     update();
 }
 
-ColorPanel::ColorPanel(Editor* editor, QWidget* parent) : QWidget(parent), m_ed(editor)
+ColorPanel::ColorPanel(Editor* editor, QWidget* parent) : QScrollArea(parent), m_ed(editor)
 {
-    auto* lay = new QVBoxLayout(this);
-    lay->setContentsMargins(10, 8, 10, 10);
+    setWidgetResizable(true);
+    setFrameShape(QFrame::NoFrame);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* content = new QWidget();
+    auto* lay = new QVBoxLayout(content);
+    lay->setContentsMargins(10, 8, 14, 10);
     lay->setSpacing(10);
-    lay->addWidget(new SectionTitle(tr("Color"), this));
-    m_target = new Segmented(this);
+    lay->addWidget(new SectionTitle(tr("Color"), content));
+    m_target = new Segmented(content);
     m_target->addSegment(tr("Fill"), "bucket");
     m_target->addSegment(tr("Stroke"), "inkbottle");
     lay->addWidget(m_target);
-    m_picker = new ColorPicker(this);
-    m_picker->setMinimumHeight(230);
+    m_picker = new ColorPicker(content);
+    m_picker->setFixedHeight(236);
     lay->addWidget(m_picker);
-    m_swatches = new SwatchGrid(this);
+    m_swatches = new SwatchGrid(content);
     lay->addWidget(m_swatches);
     lay->addStretch(1);
+    setWidget(content);
     connect(m_target, &Segmented::changed, this, &ColorPanel::sync);
     connect(m_picker, &ColorPicker::colorChanged, this, [this](const QColor& c) { apply(c, false); });
     connect(m_picker, &ColorPicker::colorCommitted, this, [this](const QColor& c) { apply(c, true); });

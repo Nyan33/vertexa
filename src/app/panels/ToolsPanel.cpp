@@ -161,11 +161,12 @@ void ToolsPanel::layoutItems()
     }
     for (const Item& it : m_items)
         if (it.id == m_ed->tool()) m_indicatorY = it.rect.top();
-    const double sy = y + 18;
-    m_stroke->move(8, int(sy));
-    m_fill->move(18, int(sy + 12));
-    m_swapButton = QRectF(8, sy + 46, 18, 18);
-    m_objectToggle = QRectF(8, sy + 72, width() - 16, 34);
+    const double sy = y + 14;
+    const int cx = (width() - 30) / 2;
+    m_stroke->move(cx, int(sy));
+    m_fill->move(cx, int(sy + 32));
+    m_swapButton = QRectF(width() / 2.0 - 9, sy + 68, 18, 18);
+    m_objectToggle = QRectF(8, sy + 94, width() - 16, 34);
 }
 
 void ToolsPanel::resizeEvent(QResizeEvent*) { layoutItems(); }

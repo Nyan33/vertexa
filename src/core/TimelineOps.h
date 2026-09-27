@@ -41,4 +41,15 @@ int splitAt(Layer& l, int frame);
 /// Make sure the layer covers `frame` (extends the last span).
 void extendTo(Layer& l, int frame);
 
+/// Number of layers directly following `index` that belong to it (folder,
+/// mask or guide children, recursively).
+int layerBlockSize(const Timeline& tl, int index);
+/// Drag a layer in the layer list: the layer moves together with its children
+/// so that it lands before the layer currently at `before` (layers.size() =
+/// bottom) and adopts the parent its new place implies — dropped right under
+/// an expanded folder, a mask or a guide it goes inside, otherwise it becomes
+/// a sibling of the visible layer above. Masks and guides never nest inside
+/// masks or guides. Returns the new index, or -1 when nothing changes.
+int moveLayer(Timeline& tl, int from, int before);
+
 } // namespace vx

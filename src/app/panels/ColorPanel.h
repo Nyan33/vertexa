@@ -4,6 +4,7 @@
 
 #include "../Editor.h"
 
+#include <QScrollArea>
 #include <QWidget>
 
 namespace vx::app {
@@ -37,7 +38,7 @@ private:
     int m_hover = -1;
 };
 
-class ColorPanel : public QWidget {
+class ColorPanel : public QScrollArea {
     Q_OBJECT
 public:
     explicit ColorPanel(Editor* editor, QWidget* parent = nullptr);

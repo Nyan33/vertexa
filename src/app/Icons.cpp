@@ -9,6 +9,7 @@
 #include <QPixmap>
 
 #include <cmath>
+#include <numbers>
 #include <functional>
 
 namespace vx::ui {
@@ -113,7 +114,7 @@ const QHash<QString, Draw>& icons()
         m["polystar"] = [](QPainter& p, const QColor& c) {
             QPainterPath s;
             for (int i = 0; i < 10; ++i) {
-                const double a = -M_PI / 2 + i * M_PI / 5;
+                const double a = -std::numbers::pi / 2 + i * std::numbers::pi / 5;
                 const double r = (i % 2) ? 3.8 : 8.5;
                 const QPointF q(12 + r * std::cos(a), 12.8 + r * std::sin(a));
                 if (i == 0) s.moveTo(q);
@@ -341,7 +342,7 @@ const QHash<QString, Draw>& icons()
         m["gear"] = [](QPainter& p, const QColor& c) {
             stroke(p, circle(12, 12, 3), c, 1.6);
             for (int i = 0; i < 8; ++i) {
-                const double a = i * M_PI / 4;
+                const double a = i * std::numbers::pi / 4;
                 stroke(p, poly({{12 + 5.5 * std::cos(a), 12 + 5.5 * std::sin(a)}, {12 + 8 * std::cos(a), 12 + 8 * std::sin(a)}}), c, 2.2);
             }
             stroke(p, circle(12, 12, 5.8), c, 1.6);
