@@ -13,6 +13,7 @@
 #include "panels/ToolsPanel.h"
 
 #include "core/Serialize.h"
+#include "core/io/FlaImport.h"
 #include "render/Renderer.h"
 #include "render/SvgExport.h"
 
@@ -44,6 +45,8 @@ using ui::Theme;
 namespace {
 
 const char* kFileFilter = "Vertexa document (*.vtx)";
+const char* kOpenFilter = "All supported (*.vtx *.fla *.xfl);;Vertexa document (*.vtx);;Flash / Animate document (*.fla *.xfl)";
+const char* kFlaFilter = "Flash / Animate document (*.fla *.xfl);;XFL folder document (DOMDocument.xml)";
 
 } // namespace
 
@@ -110,6 +113,7 @@ void MainWindow::createActions()
     // File
     add("new", tr("&New"), QKeySequence::New, [this] { newDocument(); });
     add("open", tr("&Open…"), QKeySequence::Open, [this] { open(); });
+    add("importFla", tr("Import &FLA / XFL…"), QKeySequence("Ctrl+R"), [this] { importFla(); });
     add("save", tr("&Save"), QKeySequence::Save, [this] { save(); });
     add("saveAs", tr("Save &As…"), QKeySequence("Ctrl+Shift+S"), [this] { saveAs(); });
     add("exportPng", tr("Export PNG Sequence…"), QKeySequence("Ctrl+Alt+Shift+S"), [this] { exportPngSequence(); });
@@ -299,6 +303,7 @@ void MainWindow::createMenus()
     file->addAction(a("new"));
     file->addAction(a("open"));
     m_recentMenu = file->addMenu(tr("Open &Recent"));
+    file->addAction(a("importFla"));
     file->addSeparator();
     file->addAction(a("save"));
     file->addAction(a("saveAs"));
@@ -546,12 +551,55 @@ void MainWindow::newDocument()
 void MainWindow::open()
 {
     if (!maybeSave()) return;
-    const QString path = QFileDialog::getOpenFileName(this, tr("Open Document"), {}, tr(kFileFilter));
+    const QString path = QFileDialog::getOpenFileName(this, tr("Open Document"), {}, tr(kOpenFilter));
     if (!path.isEmpty()) openFile(path);
+}
+
+void MainWindow::importFla()
+{
+    if (!maybeSave()) return;
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import Flash / Animate Document"), {}, tr(kFlaFilter));
+    if (!path.isEmpty()) importFlaFile(path);
+}
+
+bool MainWindow::importFlaFile(const QString& path)
+{
+    Document d;
+    io::ImportReport report;
+    QString err;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = io::importFla(path, d, &report, &err);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        QMessageBox::warning(this, tr("Import failed"), tr("%1\n\n%2").arg(path, err));
+        return false;
+    }
+    // Imported documents are saved as .vtx, never over the original .fla.
+    m_ed->setDocument(std::move(d), QString());
+    addRecent(path);
+    m_stage->fitStage();
+    const QString summary = tr("%1: %2 symbols, %3 layers, %4 keyframes")
+                                .arg(report.generator.isEmpty() ? QFileInfo(path).fileName() : report.generator)
+                                .arg(report.symbols)
+                                .arg(report.layers)
+                                .arg(report.keyframes);
+    m_stage->showToast(tr("Imported %1").arg(QFileInfo(path).fileName()));
+    statusBar()->showMessage(summary, 8000);
+    if (!report.warnings.isEmpty()) {
+        QStringList unique;
+        for (const QString& w : report.warnings)
+            if (!unique.contains(w)) unique << w;
+        auto* box = new QMessageBox(QMessageBox::Information, tr("Imported with notes"), summary, QMessageBox::Ok, this);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        box->setInformativeText(unique.mid(0, 12).join('\n'));
+        box->open();
+    }
+    return true;
 }
 
 bool MainWindow::openFile(const QString& path)
 {
+    if (io::detectFla(path) != io::FlaFormat::Unknown) return importFlaFile(path);
     Document d;
     QString err;
     if (!loadDocument(path, d, &err)) {

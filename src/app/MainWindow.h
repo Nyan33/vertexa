@@ -44,6 +44,8 @@ private:
     bool saveAs();
     void newDocument();
     void open();
+    void importFla();
+    bool importFlaFile(const QString& path);
     void exportPngSequence();
     void exportSvg();
     void exportVideo();

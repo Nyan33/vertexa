@@ -9,6 +9,7 @@
 #include "BlendMode.h"
 #include "BrushPreset.h"
 #include "Color.h"
+#include "Filter.h"
 #include "ShapeGraph.h"
 
 #include <memory>
@@ -68,6 +69,7 @@ public:
     int firstFrame = 0;     ///< graphic symbols
     int lastFrame = -1;     ///< graphic symbols, -1 = last frame of the symbol
     bool visible = true;
+    FilterList filters;     ///< movie clips and buttons
 
     ElementType type() const override { return ElementType::Instance; }
     std::shared_ptr<Element> clone() const override { return std::make_shared<InstanceElement>(*this); }

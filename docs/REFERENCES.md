@@ -12,7 +12,7 @@ behaviour, file formats and algorithms; no source code was copied from them.
 | [**OpenToonz**](https://github.com/opentoonz/opentoonz) | A production 2D animation tool with vector levels and region filling (gap closing, "autoclose"), Xsheet/timeline workflows and tablet input on all platforms. |
 | [**Flare**](https://github.com/Flare-Animate/Flare) ([site](https://flare-animate.github.io/website/)) | An open-source animation editor built around Flash/Animate workflows. Its documentation refers to the Adobe Flash API and to similar projects; we use it to check feature coverage and naming. |
 | [**Ruffle**](https://github.com/ruffle-rs/ruffle) | Flash player in Rust: a reference for how SWF shapes (edge lists with fillStyle0/1) turn into filled regions, and how Flash applies blend modes, colour transforms and masks. |
-| [**fla-viewer**](https://github.com/lifeart/fla-viewer) | Reads XFL/FLA documents: a reference for the DOMDocument / DOMTimeline / DOMLayer / DOMFrame / DOMShape structure that Vertexa's model mirrors (for future import). |
+| [**fla-viewer**](https://github.com/lifeart/fla-viewer) and [**fla-viewer-fix**](https://github.com/liangforstudy/fla-viewer-fix) (ISC) | Reads XFL and binary FLA documents. Its notes on the pre-CS5 binary format (MFC archives, `CPicPage`/`CPicLayer`/`CPicFrame`, the edge stream, the frame tail up to Flash 8, based on Ed Moore's fla-decoder) were the starting point for Vertexa's own decoder; the CS4 layouts in [FLA_FORMAT.md](FLA_FORMAT.md) were worked out from a real CS4 file. |
 | [**Paper.js**](https://github.com/paperjs/paper.js) | Robust boolean operations and curve fitting on cubic Beziers (winding contributions, Newton reparameterisation in fitting). |
 
 ## Specifications

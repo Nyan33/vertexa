@@ -82,6 +82,75 @@ const auto kTipType = VX_NAMES("auto", "image");
 const auto kAutoShape = VX_NAMES("circle", "square");
 const auto kTexMode = VX_NAMES("multiply", "subtract", "height");
 
+// --- filters ----------------------------------------------------------------------
+
+const auto kBevelKind = VX_NAMES("inner", "outer", "full");
+
+QJsonObject filterToJson(const Filter& f)
+{
+    QJsonObject o;
+    o["type"] = QString::fromUtf8(filterId(f.type).data(), int(filterId(f.type).size()));
+    if (!f.enabled) o["enabled"] = false;
+    if (f.type == FilterType::AdjustColor) {
+        o["brightness"] = f.brightness;
+        o["contrast"] = f.contrast;
+        o["saturation"] = f.saturation;
+        o["hue"] = f.hue;
+        return o;
+    }
+    o["blurX"] = f.blurX;
+    o["blurY"] = f.blurY;
+    o["quality"] = f.quality;
+    if (f.type == FilterType::Blur) return o;
+    o["strength"] = f.strength;
+    o["color"] = colorToString(f.color);
+    o["inner"] = f.inner;
+    o["knockout"] = f.knockout;
+    if (f.type != FilterType::Glow && f.type != FilterType::GradientGlow) {
+        o["angle"] = f.angle;
+        o["distance"] = f.distance;
+    }
+    if (f.type == FilterType::DropShadow) o["hideObject"] = f.hideObject;
+    if (f.type == FilterType::Bevel) o["highlight"] = colorToString(f.highlight);
+    if (f.type == FilterType::Bevel || f.type == FilterType::GradientBevel) o["bevel"] = enumName(f.bevel, kBevelKind);
+    if (f.type == FilterType::GradientGlow || f.type == FilterType::GradientBevel) {
+        QJsonArray stops;
+        for (const GradientStop& st : f.gradient.stops) stops.append(QJsonArray{st.pos, colorToString(st.color)});
+        o["stops"] = stops;
+    }
+    return o;
+}
+
+Filter filterFromJson(const QJsonObject& o)
+{
+    Filter f = Filter::defaults(filterFromId(o["type"].toString().toStdString()));
+    f.enabled = o["enabled"].toBool(true);
+    f.blurX = o["blurX"].toDouble(f.blurX);
+    f.blurY = o["blurY"].toDouble(f.blurY);
+    f.quality = std::clamp(o["quality"].toInt(f.quality), 1, 3);
+    f.strength = o["strength"].toDouble(f.strength);
+    f.color = colorFromValue(o["color"], f.color);
+    f.highlight = colorFromValue(o["highlight"], f.highlight);
+    f.inner = o["inner"].toBool(false);
+    f.knockout = o["knockout"].toBool(false);
+    f.hideObject = o["hideObject"].toBool(false);
+    f.angle = o["angle"].toDouble(f.angle);
+    f.distance = o["distance"].toDouble(f.distance);
+    f.bevel = enumFrom(o["bevel"], kBevelKind, BevelKind::Inner);
+    f.brightness = o["brightness"].toDouble(0);
+    f.contrast = o["contrast"].toDouble(0);
+    f.saturation = o["saturation"].toDouble(0);
+    f.hue = o["hue"].toDouble(0);
+    if (o.contains("stops")) {
+        f.gradient.stops.clear();
+        for (const QJsonValue& v : o["stops"].toArray()) {
+            const QJsonArray a = v.toArray();
+            f.gradient.stops.push_back({a.at(0).toDouble(), colorFromValue(a.at(1))});
+        }
+    }
+    return f;
+}
+
 // --- styles -----------------------------------------------------------------------
 
 QJsonObject fillToJson(const FillStyle& f)
@@ -265,6 +334,11 @@ QJsonObject elementToJson(const Element& e)
         o["firstFrame"] = in.firstFrame;
         if (in.lastFrame >= 0) o["lastFrame"] = in.lastFrame;
         if (!in.visible) o["visible"] = false;
+        if (!in.filters.empty()) {
+            QJsonArray filters;
+            for (const Filter& f : in.filters) filters.append(filterToJson(f));
+            o["filters"] = filters;
+        }
         break;
     }
     case ElementType::Group: {
@@ -336,6 +410,7 @@ ElementPtr elementFromJson(const QJsonObject& o)
         in->firstFrame = o["firstFrame"].toInt();
         in->lastFrame = o["lastFrame"].toInt(-1);
         in->visible = o["visible"].toBool(true);
+        for (const QJsonValue& v : o["filters"].toArray()) in->filters.push_back(filterFromJson(v.toObject()));
         e = in;
     } else if (type == "group") {
         auto g = std::make_shared<GroupElement>();
