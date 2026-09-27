@@ -79,12 +79,38 @@ QStringList easeNames()
     return out;
 }
 
-QStringList blendNames(bool animateOnly)
+/// Blend mode picker grouped like Animate's menu (Normal | Layer | darken
+/// group | lighten group | contrast group | Add, Subtract, Difference |
+/// Invert, Alpha, Erase), followed by the extra Krita-style modes.
+QComboBox* blendCombo(QWidget* parent, BlendMode current, std::function<void(BlendMode)> fn)
 {
-    QStringList out;
+    auto* c = new QComboBox(parent);
+    auto add = [c](BlendMode m) {
+        const auto label = blendModeLabel(m);
+        c->addItem(QString::fromUtf8(label.data(), int(label.size())), int(m));
+    };
+    const std::vector<std::vector<BlendMode>> groups = {
+        {BlendMode::Normal},
+        {BlendMode::Layer},
+        {BlendMode::Darken, BlendMode::Multiply},
+        {BlendMode::Lighten, BlendMode::Screen},
+        {BlendMode::Overlay, BlendMode::HardLight},
+        {BlendMode::Add, BlendMode::Subtract, BlendMode::Difference},
+        {BlendMode::Invert, BlendMode::Alpha, BlendMode::Erase},
+    };
+    for (size_t g = 0; g < groups.size(); ++g) {
+        if (g > 0) c->insertSeparator(c->count());
+        for (BlendMode m : groups[g]) add(m);
+    }
+    c->insertSeparator(c->count());
     for (const auto& b : kBlendModes)
-        if (!animateOnly || b.animate) out << QString::fromUtf8(b.label.data(), int(b.label.size()));
-    return out;
+        if (!b.animate) add(b.mode);
+    c->setCurrentIndex(std::max(0, c->findData(int(current))));
+    QObject::connect(c, qOverload<int>(&QComboBox::activated), parent, [c, fn](int i) {
+        const QVariant v = c->itemData(i);
+        if (v.isValid()) fn(BlendMode(v.toInt()));
+    });
+    return c;
 }
 
 } // namespace
@@ -562,9 +588,8 @@ void PropertiesPanel::buildSelection()
         }
         // Blending (movie clips and buttons, like Animate).
         if (sym && sym->type != SymbolType::Graphic) {
-            QStringList names = blendNames(false);
-            auto* bc = combo(m_content, names, int(in->blend), [this](int i) {
-                m_ed->setInstanceProperty([i](InstanceElement& x) { x.blend = BlendMode(i); }, tr("Blending"));
+            auto* bc = blendCombo(m_content, in->blend, [this](BlendMode b) {
+                m_ed->setInstanceProperty([b](InstanceElement& x) { x.blend = b; }, tr("Blending"));
             });
             row(ig, tr("Blending"), bc);
             row(ig, {}, check(m_content, tr("Visible"), in->visible, [this](bool b) {
@@ -670,9 +695,26 @@ void PropertiesPanel::buildFilters(const InstanceElement& in, const std::functio
             row(fg, tr("Hue"), num(f.hue, -180, 180, 0, 1, QStringLiteral("°"), [](Filter& x, double v) { x.hue = v; }, tr("Hue")));
             continue;
         }
+        // Blur X / Y with Animate's link lock: while linked both change together.
+        auto linked = std::make_shared<bool>(f.blurX == f.blurY);
+        auto* lock = new QToolButton(m_content);
+        lock->setCheckable(true);
+        lock->setChecked(*linked);
+        lock->setIcon(ui::icon(*linked ? "lock" : "unlock"));
+        lock->setToolTip(tr("Link blur X and Y"));
+        connect(lock, &QToolButton::toggled, lock, [lock, linked](bool on) {
+            *linked = on;
+            lock->setIcon(ui::icon(on ? "lock" : "unlock"));
+        });
+        auto blurSet = [linked](bool isX) {
+            return [linked, isX](Filter& x, double v) {
+                if (*linked || isX) x.blurX = v;
+                if (*linked || !isX) x.blurY = v;
+            };
+        };
         row(fg, tr("Blur X / Y"),
-            hbox(m_content, {num(f.blurX, 0, 255, 1, 0.5, QStringLiteral(" px"), [](Filter& x, double v) { x.blurX = v; }, tr("Blur")),
-                             num(f.blurY, 0, 255, 1, 0.5, QStringLiteral(" px"), [](Filter& x, double v) { x.blurY = v; }, tr("Blur"))}));
+            hbox(m_content, {num(f.blurX, 0, 255, 1, 0.5, QStringLiteral(" px"), blurSet(true), tr("Blur")), lock,
+                             num(f.blurY, 0, 255, 1, 0.5, QStringLiteral(" px"), blurSet(false), tr("Blur"))}));
         row(fg, tr("Quality"), combo(m_content, {tr("Low"), tr("Medium"), tr("High")}, std::clamp(f.quality, 1, 3) - 1,
                                      [commit](int q) { commit([q](Filter& x) { x.quality = q + 1; }, QObject::tr("Filter Quality")); }));
         if (f.type == FilterType::Blur) continue;
@@ -805,8 +847,8 @@ void PropertiesPanel::buildLayer()
             m_ed->setLayerProperty(li, [i](Layer& x) { x.type = LayerType(i); }, tr("Layer Type"));
         }));
     if (l->type != LayerType::Folder) {
-        row(g, tr("Blending"), combo(m_content, blendNames(false), int(l->blend), [this, li](int i) {
-                m_ed->setLayerProperty(li, [i](Layer& x) { x.blend = BlendMode(i); }, tr("Layer Blending"));
+        row(g, tr("Blending"), blendCombo(m_content, l->blend, [this, li](BlendMode b) {
+                m_ed->setLayerProperty(li, [b](Layer& x) { x.blend = b; }, tr("Layer Blending"));
             }));
         row(g, tr("Opacity"), number(m_content, l->opacity * 100, 0, 100, 0, 1, "%", [this, li](double v) {
                 m_ed->setLayerProperty(li, [v](Layer& x) { x.opacity = v / 100.0; }, tr("Layer Opacity"));

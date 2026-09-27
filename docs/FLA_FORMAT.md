@@ -154,10 +154,11 @@ u16, 16 × f32 3D matrix, 24 bytes, s32 x, s32 y 3D centre, 6 bytes
 Movie clips and buttons continue with u8 schema, a timeline sub-object,
 CString, u32, 18 bytes and a CString (component metadata XML).
 
-**Filter (48 bytes, CS4):** u8 enabled, u8 type, 6 bytes, u32 colour (RGBA),
-f32 distance, f32 blur x, f32 blur y, f32 angle (radians), u32 inner, u32
-knockout, u32 quality (1–3), u32 strength (%), u32 hide object. Type 3 is Glow
-(the only type seen so far).
+**Filter (48 bytes, CS4):** u8 type in SWF numbering (0 drop shadow, 1 blur,
+2 glow, 3 bevel, 4 gradient glow, 6 adjust colour, 7 gradient bevel), 7 bytes,
+u32 colour (RGBA), f32 distance, f32 blur x, f32 blur y, f32 angle (radians),
+u32 inner, u32 knockout, u32 quality (1–3), u32 strength (%), u32 hide object.
+Verified on Blur filters (blur 138 × 138, quality high, as shown by Animate).
 
 ## Contents
 

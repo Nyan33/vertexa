@@ -495,11 +495,10 @@ void Archive::frameTail(PFrame& f)
 
 Filter Archive::filter()
 {
-    // 48-byte generic filter record (verified on Glow filters).
+    // 48-byte generic filter record; the type uses SWF filter numbering.
     Filter f;
-    f.enabled = r.u8() != 0;
     const int type = r.u8();
-    r.skip(6);
+    r.skip(7);
     const Color color = readColor(r);
     f.distance = r.f32();
     f.blurX = r.f32();
@@ -511,13 +510,18 @@ Filter Archive::filter()
     f.strength = r.u32() / 100.0;
     f.hideObject = r.u32() != 0;
     switch (type) {
-    case 1: f.type = FilterType::DropShadow; break;
-    case 2: f.type = FilterType::Blur; break;
-    case 3: f.type = FilterType::Glow; break;
-    case 4: f.type = FilterType::Bevel; break;
-    case 5: f.type = FilterType::GradientGlow; break;
-    case 8: f.type = FilterType::GradientBevel; break;
-    default: f.type = FilterType::Glow; break;
+    case 0: f.type = FilterType::DropShadow; break;
+    case 1: f.type = FilterType::Blur; break;
+    case 2: f.type = FilterType::Glow; break;
+    case 3: f.type = FilterType::Bevel; break;
+    case 4: f.type = FilterType::GradientGlow; break;
+    case 6: f.type = FilterType::AdjustColor; break;
+    case 7: f.type = FilterType::GradientBevel; break;
+    default:
+        f.type = FilterType::Blur;
+        if (!m_warnings.contains(QStringLiteral("Unknown filter types are imported as blur")))
+            m_warnings << QStringLiteral("Unknown filter types are imported as blur");
+        break;
     }
     f.color = color;
     return f;
