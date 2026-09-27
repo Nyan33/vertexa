@@ -288,6 +288,12 @@ const ShapeRenderData& ShapeGraph::renderData() const
     return *m_cache.render;
 }
 
+std::shared_ptr<const ShapeRenderData> ShapeGraph::renderDataPtr() const
+{
+    (void)renderData();
+    return m_cache.render;
+}
+
 const Arrangement& ShapeGraph::topology() const
 {
     if (!m_cache.topology) {

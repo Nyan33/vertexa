@@ -6,6 +6,8 @@
 #include "StageView.h"
 #include "Theme.h"
 
+#include "render/GlRenderer.h"
+
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDockWidget>
@@ -41,6 +43,9 @@ int main(int argc, char** argv)
     app.setApplicationVersion(VERTEXA_VERSION);
     app.setApplicationDisplayName("Vertexa");
     app.setWindowIcon(QIcon(":/icons/vertexa-256.png"));
+    // GPU rendering (View > GPU Rendering); VERTEXA_GPU=0 turns it off.
+    if (qEnvironmentVariable("VERTEXA_GPU") != QLatin1String("0"))
+        vx::GlRenderer::setEnabled(QSettings().value("render/gpu", true).toBool());
     // Lets Wayland / X11 desktops match windows with vertexa.desktop.
     QGuiApplication::setDesktopFileName("vertexa");
 

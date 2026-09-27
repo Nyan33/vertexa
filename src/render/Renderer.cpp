@@ -128,6 +128,12 @@ bool Renderer::layerHidden(const Timeline& tl, int index) const
 
 void Renderer::render(QImage& target, const Timeline& tl, int frame, const Affine& view, const ColorTransform& ct)
 {
+    CpuSurface surface(target);
+    render(surface, tl, frame, view, ct);
+}
+
+void Renderer::render(Surface& target, const Timeline& tl, int frame, const Affine& view, const ColorTransform& ct)
+{
     Ctx c;
     c.m = view;
     c.ct = ct;
@@ -137,15 +143,16 @@ void Renderer::render(QImage& target, const Timeline& tl, int frame, const Affin
 
 void Renderer::renderItems(QImage& target, const std::vector<EvalItem>& items, const Affine& view, const ColorTransform& ct)
 {
+    CpuSurface surface(target);
     Ctx c;
     c.m = view;
     c.ct = ct;
     c.clip = target.rect();
     c.focus = m_opts.focusPath.size();
-    renderList(target, items, c);
+    renderList(surface, items, c);
 }
 
-void Renderer::renderTimeline(QImage& target, const Timeline& tl, int frame, const Ctx& c)
+void Renderer::renderTimeline(Surface& target, const Timeline& tl, int frame, const Ctx& c)
 {
     if (c.depth > 32) return;
     const int n = int(tl.layers.size());
@@ -163,20 +170,18 @@ void Renderer::renderTimeline(QImage& target, const Timeline& tl, int frame, con
         if (l.type == LayerType::Mask) {
             const bool active = !m_opts.masksNeedLock || l.locked;
             if (active) {
-                QImage content(target.size(), QImage::Format_ARGB32_Premultiplied);
-                content.fill(0);
+                std::unique_ptr<Surface> content = target.makeLayer(target.size());
                 Ctx cc = c;
                 for (int j = n - 1; j >= 0; --j) {
                     if (tl.layers[j].parentId != l.id || layerHidden(tl, j)) continue;
-                    renderLayerItems(content, tl, j, frame, cc);
+                    renderLayerItems(*content, tl, j, frame, cc);
                 }
-                QImage mask(target.size(), QImage::Format_ARGB32_Premultiplied);
-                mask.fill(0);
+                std::unique_ptr<Surface> mask = target.makeLayer(target.size());
                 Ctx mc = c;
                 mc.ct = ColorTransform{}; // mask shape: only coverage matters
-                renderLayerItems(mask, tl, i, frame, mc);
-                applyMask(content, mask);
-                compositeImage(target, content, QPoint(0, 0), BlendMode::Normal, 1.0);
+                renderLayerItems(*mask, tl, i, frame, mc);
+                content->applyMask(*mask);
+                target.composite(*content, QPoint(0, 0), BlendMode::Normal, 1.0);
                 continue;
             }
         }
@@ -184,7 +189,7 @@ void Renderer::renderTimeline(QImage& target, const Timeline& tl, int frame, con
     }
 }
 
-void Renderer::renderLayerItems(QImage& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c)
+void Renderer::renderLayerItems(Surface& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c)
 {
     const Layer& l = tl.layers[layerIndex];
     const std::vector<EvalItem> items = evaluateLayer(m_doc, tl, layerIndex, frame);
@@ -201,26 +206,25 @@ void Renderer::renderLayerItems(QImage& target, const Timeline& tl, int layerInd
     int focusItem = -1;
     if (c.focus < m_opts.focusPath.size() && m_opts.focusPath[c.focus].first == l.id)
         focusItem = m_opts.focusPath[c.focus].second;
-    auto draw = [&](QImage& dst, const Ctx& ctx) {
+    auto draw = [&](Surface& dst, const Ctx& ctx) {
         for (int i = 0; i < int(items.size()); ++i) renderElement(dst, items[i], ctx, i == focusItem);
     };
     if ((l.blend != BlendMode::Normal || l.opacity < 1.0) && !lc.outline) {
-        QImage buf(target.size(), QImage::Format_ARGB32_Premultiplied);
-        buf.fill(0);
+        std::unique_ptr<Surface> buf = target.makeLayer(target.size());
         lc.isolated = true;
-        draw(buf, lc);
-        compositeImage(target, buf, QPoint(0, 0), l.blend, l.opacity);
+        draw(*buf, lc);
+        target.composite(*buf, QPoint(0, 0), l.blend, l.opacity);
         return;
     }
     draw(target, lc);
 }
 
-void Renderer::renderList(QImage& target, const std::vector<EvalItem>& items, const Ctx& c)
+void Renderer::renderList(Surface& target, const std::vector<EvalItem>& items, const Ctx& c)
 {
     for (const EvalItem& it : items) renderElement(target, it, c, false);
 }
 
-void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c, bool onPath)
+void Renderer::renderElement(Surface& target, const EvalItem& item, const Ctx& c, bool onPath)
 {
     const Element& e = *item.element;
     Ctx ec = c;
@@ -237,26 +241,27 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
         const auto& s = static_cast<const ShapeElement&>(e);
         if (!s.graph) return;
         if (c.slice) {
-            const ShapeRenderData rd = c.slice->apply(*s.graph, c.toSymbol * e.matrix).renderData();
-            if (c.outline) renderOutline(target, rd, c.sliceBase, c.outlineColor, c.clip);
-            else renderShape(target, rd, c.sliceBase, c.ct, c.clip);
+            const auto rd = std::make_shared<const ShapeRenderData>(c.slice->apply(*s.graph, c.toSymbol * e.matrix).renderData());
+            if (c.outline) target.drawOutline(*rd, c.sliceBase, c.outlineColor, c.clip);
+            else target.drawShape(rd, c.sliceBase, c.ct, c.clip);
             return;
         }
-        if (c.outline) renderOutline(target, s.graph->renderData(), m, c.outlineColor, c.clip);
-        else renderShape(target, s.graph->renderData(), m, c.ct, c.clip);
+        if (c.outline) target.drawOutline(s.graph->renderData(), m, c.outlineColor, c.clip);
+        else target.drawShape(s.graph->renderDataPtr(), m, c.ct, c.clip);
         return;
     }
     case ElementType::Morph: {
         const auto& mo = static_cast<const MorphElement&>(e);
         if (!mo.data) return;
         if (c.slice) {
-            const ShapeRenderData rd = c.slice->apply(graphFromRenderData(*mo.data), c.toSymbol * e.matrix).renderData();
-            if (c.outline) renderOutline(target, rd, c.sliceBase, c.outlineColor, c.clip);
-            else renderShape(target, rd, c.sliceBase, c.ct, c.clip);
+            const auto rd = std::make_shared<const ShapeRenderData>(
+                c.slice->apply(graphFromRenderData(*mo.data), c.toSymbol * e.matrix).renderData());
+            if (c.outline) target.drawOutline(*rd, c.sliceBase, c.outlineColor, c.clip);
+            else target.drawShape(rd, c.sliceBase, c.ct, c.clip);
             return;
         }
-        if (c.outline) renderOutline(target, *mo.data, m, c.outlineColor, c.clip);
-        else renderShape(target, *mo.data, m, c.ct, c.clip);
+        if (c.outline) target.drawOutline(*mo.data, m, c.outlineColor, c.clip);
+        else target.drawShape(mo.data, m, c.ct, c.clip);
         return;
     }
     case ElementType::Group: {
@@ -301,25 +306,23 @@ void Renderer::renderElement(QImage& target, const EvalItem& item, const Ctx& c,
             const QRect area = deviceRect(m.mapRect(local)).adjusted(-margin, -margin, margin, margin) &
                                clip.adjusted(-margin, -margin, margin, margin);
             if (area.isEmpty() || double(area.width()) * area.height() > 64e6) return;
-            QImage buf(area.size(), QImage::Format_ARGB32_Premultiplied);
-            buf.fill(0);
+            std::unique_ptr<Surface> buf = target.makeLayer(area.size());
             Ctx fc = ic;
             fc.m = Affine::translate(-area.x(), -area.y()) * m;
             fc.sliceBase = fc.m;
             fc.ct = ColorTransform{};
             fc.isolated = true;
-            fc.clip = buf.rect();
-            renderTimeline(buf, sym->timeline, frame, fc);
-            applyFilters(buf, in.filters, scale);
-            applyColorTransform(buf, ic.ct);
-            compositeImage(target, buf, area.topLeft(), blends ? in.blend : BlendMode::Normal, 1.0);
+            fc.clip = buf->rect();
+            renderTimeline(*buf, sym->timeline, frame, fc);
+            buf->applyFilters(in.filters, scale);
+            buf->applyColorTransform(ic.ct);
+            target.composite(*buf, area.topLeft(), blends ? in.blend : BlendMode::Normal, 1.0);
             return;
         }
-        QImage buf(target.size(), QImage::Format_ARGB32_Premultiplied);
-        buf.fill(0);
+        std::unique_ptr<Surface> buf = target.makeLayer(target.size());
         ic.isolated = true;
-        renderTimeline(buf, sym->timeline, frame, ic);
-        compositeImage(target, buf, QPoint(0, 0), in.blend, 1.0);
+        renderTimeline(*buf, sym->timeline, frame, ic);
+        target.composite(*buf, QPoint(0, 0), in.blend, 1.0);
         return;
     }
     }

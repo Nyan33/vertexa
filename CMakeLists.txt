@@ -28,7 +28,7 @@ endif()
 # The geometry kernel is pure C++ and has no Qt dependency.
 add_subdirectory(src/geom)
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui OpenGL)
 if(VERTEXA_BUILD_APP)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets)
 endif()

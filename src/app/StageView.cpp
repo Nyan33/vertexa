@@ -8,6 +8,7 @@
 
 #include "core/Evaluate.h"
 #include "render/Blend.h"
+#include "render/GlRenderer.h"
 #include "render/QtConvert.h"
 #include "render/Renderer.h"
 
@@ -251,7 +252,7 @@ void StageView::renderCache()
             o.focusPath = path;
             QImage dim(sz, QImage::Format_ARGB32_Premultiplied);
             dim.fill(0);
-            Renderer(d, o).render(dim, d.scenes[std::clamp(m_ed->scene(), 0, int(d.scenes.size()) - 1)], m_ed->rootFrame(), devView);
+            renderAccelerated(dim, d, d.scenes[std::clamp(m_ed->scene(), 0, int(d.scenes.size()) - 1)], m_ed->rootFrame(), devView, {}, o, true);
             compositeImage(m_cache, dim, QPoint(0, 0), BlendMode::Normal, 0.3);
         }
     }
@@ -265,14 +266,14 @@ void StageView::renderCache()
             if (m_ed->onionOutline) {
                 o.forceOutline = true;
                 o.outlineColor = tint;
-                Renderer(d, o).render(buf, tl, f, ctx);
+                renderAccelerated(buf, d, tl, f, ctx, {}, o, true);
             } else {
                 ColorTransform ct;
                 ct.rm = ct.gm = ct.bm = 0.35;
                 ct.ro = tint.red() * 0.65;
                 ct.go = tint.green() * 0.65;
                 ct.bo = tint.blue() * 0.65;
-                Renderer(d, o).render(buf, tl, f, ctx, ct);
+                renderAccelerated(buf, d, tl, f, ctx, ct, o, true);
             }
             compositeImage(m_cache, buf, QPoint(0, 0), BlendMode::Normal, alpha);
         };
@@ -286,7 +287,8 @@ void StageView::renderCache()
     o.clipFrame = m_ed->isPlaying() ? m_ed->frame() : 0;
     o.hotButton = m_hotButton;
     o.hotState = m_buttonDown ? ButtonState::Down : ButtonState::Over;
-    Renderer(d, o).render(m_cache, tl, m_ed->frame(), ctx);
+    const bool empty = !m_ed->inSymbol() && !(m_ed->onionSkin && !m_ed->isPlaying());
+    renderAccelerated(m_cache, d, tl, m_ed->frame(), ctx, {}, o, empty);
     m_cache.setDevicePixelRatio(dpr);
     m_cacheValid = true;
 }
