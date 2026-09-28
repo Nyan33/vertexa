@@ -21,6 +21,9 @@
 - [x] 9-slice scaling with exact curve splitting
 - [x] Library folders
 - [x] GPU rendering through OpenGL with a CPU fallback
+- [x] The stage on Qt RHI: Vulkan, Metal, Direct3D 11/12, OpenGL, shown without read-back
+- [x] Layer cache, multi-threaded rasterisation, background brush previews
+- [x] Layer opacity and blending (Layer Properties)
 - [x] Loop range for playback
 - [x] `.vtx` files, PNG sequence / SVG / video export
 
@@ -37,6 +40,6 @@
 - **Scenes** panel (the model already supports several scenes)
 - **FLA import, next steps**: bitmaps, text, sounds and shape tweens of binary files; XFL export
 - **Import**: SVG, bitmaps; **export**: SWF, animated GIF / APNG, sprite sheets
-- **Performance**: filters on the GPU, tiled and threaded CPU rendering, a Vulkan / Metal backend
+- **Performance**: filters on the GPU; caching unchanged layers on the GPU as on the CPU
 - **Localisation** (Russian first) and customisable shortcuts
 - Flatpak, signed and notarised packages

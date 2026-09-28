@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "TimelinePanel.h"
+#include "../Dialogs.h"
 #include "../Icons.h"
 #include "../Theme.h"
 #include "../Widgets.h"
@@ -376,7 +377,27 @@ void TimelineView::paintLayerColumn(QPainter& p)
         ui::paintIcon(p, icon, QRectF(x, y + 7, 16, 16), current ? pal.text : pal.text2);
         p.setFont(Theme::ui(12.5, current ? QFont::DemiBold : QFont::Normal));
         p.setPen(l.visible ? (current ? pal.text : pal.text2) : pal.text3);
-        const QRectF nameRect(x + 24, y, m_layersW - 84 - (x + 24), m_rowH);
+        QRectF nameRect(x + 24, y, m_layersW - 84 - (x + 24), m_rowH);
+        // Opacity and blending, when the layer has them.
+        QString badge;
+        if (l.type != LayerType::Folder) {
+            if (l.opacity < 1.0) badge = QString("%1%").arg(std::lround(l.opacity * 100));
+            if (l.blend != BlendMode::Normal) {
+                const auto label = blendModeLabel(l.blend);
+                badge += (badge.isEmpty() ? "" : " · ") + QString::fromUtf8(label.data(), int(label.size()));
+            }
+        }
+        if (!badge.isEmpty()) {
+            const QFont font = Theme::ui(10, QFont::DemiBold);
+            const double bw = std::min(nameRect.width() * 0.45, QFontMetricsF(font).horizontalAdvance(badge) + 4);
+            p.save();
+            p.setFont(font);
+            p.setPen(pal.text3);
+            p.drawText(QRectF(nameRect.right() - bw, y, bw, m_rowH), Qt::AlignVCenter | Qt::AlignRight,
+                       QFontMetrics(font).elidedText(badge, Qt::ElideRight, int(bw)));
+            p.restore();
+            nameRect.setRight(nameRect.right() - bw - 6);
+        }
         p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft,
                    QFontMetrics(p.font()).elidedText(QString::fromStdString(l.name), Qt::ElideRight, int(nameRect.width())));
         // Toggles.
@@ -591,7 +612,12 @@ void TimelineView::mouseDoubleClickEvent(QMouseEvent* e)
     if (row < 0) return;
     const int li = m_rows[row];
     if (pos.x() < m_layersW) {
-        if (toggleAt(pos, row) == Toggle::None) startRename(li);
+        if (toggleAt(pos, row) != Toggle::None) return;
+        // Like Animate: the layer icon opens Layer Properties, the name renames.
+        const Layer& l = m_ed->timeline().layers[li];
+        const double iconX = 10 + m_ed->timeline().depth(li) * 14.0 + (l.type == LayerType::Folder ? 12 : 0);
+        if (pos.x() >= iconX - 4 && pos.x() <= iconX + 20) LayerDialog::edit(m_ed, li, this);
+        else startRename(li);
         return;
     }
     const Layer& l = m_ed->timeline().layers[li];
@@ -692,6 +718,17 @@ void TimelineView::layerMenu(const QPoint& global, int li)
     const Layer l = m_ed->timeline().layers[li];
     QMenu menu(this);
     menu.addAction(tr("Rename"), this, [this, li]() { startRename(li); });
+    menu.addAction(tr("Properties…"), this, [this, li]() { LayerDialog::edit(m_ed, li, this); });
+    if (l.type != LayerType::Folder) {
+        QMenu* opacity = menu.addMenu(tr("Opacity"));
+        for (int pct : {100, 75, 50, 25, 10}) {
+            QAction* a = opacity->addAction(QString("%1%").arg(pct), this, [this, li, pct]() {
+                m_ed->setLayerProperty(li, [pct](Layer& x) { x.opacity = pct / 100.0; }, tr("Layer Opacity"));
+            });
+            a->setCheckable(true);
+            a->setChecked(std::lround(l.opacity * 100) == pct);
+        }
+    }
     menu.addSeparator();
     auto typeAction = [&](const QString& text, LayerType t) {
         QAction* a = menu.addAction(text, this, [this, li, t]() {

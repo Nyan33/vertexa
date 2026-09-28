@@ -28,7 +28,11 @@ struct RasterFill {
 void rasterizeFills(QImage& target, const std::vector<RasterFill>& fills, const Affine& toDevice, const QRect& clip);
 
 /// Flatten a contour into a polyline (device space) with the given tolerance.
-void flattenContour(const Contour& c, const Affine& m, double tolerance, std::vector<Vec2>& out);
+/// With `cull`, curves whose control points all lie outside it become
+/// straight chords: for filling a region inside `cull` only the end points
+/// of such curves matter.
+void flattenContour(const Contour& c, const Affine& m, double tolerance, std::vector<Vec2>& out,
+                    const Rect* cull = nullptr);
 
 /// Premultiplied ARGB for a (non-premultiplied) colour.
 inline uint32_t premultiply(const Color& c)

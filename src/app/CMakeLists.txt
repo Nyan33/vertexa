@@ -4,6 +4,7 @@ add_library(vx_app STATIC
     Widgets.h Widgets.cpp
     Editor.h Editor.cpp EditorCommands.cpp
     StageView.h StageView.cpp
+    StageCanvas.h StageCanvas.cpp
     Dialogs.h Dialogs.cpp
     DemoDocument.h DemoDocument.cpp
     MainWindow.h MainWindow.cpp

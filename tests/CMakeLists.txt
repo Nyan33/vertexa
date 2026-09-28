@@ -36,4 +36,8 @@ if(TARGET vx_app)
     target_link_libraries(test_app PRIVATE vx_app)
     add_test(NAME app COMMAND test_app)
     set_tests_properties(app PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(test_stage_gpu test_stage_gpu.cpp TestMain.h)
+    target_link_libraries(test_stage_gpu PRIVATE vx_app)
+    add_test(NAME stage_gpu COMMAND test_stage_gpu)
 endif()

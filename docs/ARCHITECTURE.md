@@ -175,6 +175,10 @@ object.
   in the style of font-rs). All fills of one shape are rasterised in a single
   pass with a *coverage-weighted colour sum*, so the edge shared by two fills
   gets full coverage and never shows the background through a seam.
+  Curves whose control points lie outside the clip are replaced by their
+  chords (only their end points matter for the winding inside it), and only
+  segments crossing the clipped rows are sorted, so a zoomed-in view or a
+  band of the frame costs what it shows.
 - `Blend` — premultiplied compositing with all Animate blend modes plus the
   Krita/W3C ones. As in Flash, a blended movie clip is rendered into its own
   buffer first, and Alpha / Erase only act inside a parent set to Layer.
@@ -189,6 +193,38 @@ object.
   composited. It draws through a `Surface`, which decides where the pixels
   are made: `CpuSurface` wraps a `QImage` and uses the rasteriser above,
   `GlSurface` draws on the GPU.
+  Large CPU frames are drawn in horizontal bands on a thread pool: each band
+  is an image over the target's own rows and walks the document itself, so
+  nothing drawn for one band (a filter margin, an isolated layer) reaches
+  another. Shape graphs build their render data and topology behind a
+  mutex, as several threads read them.
+- `LayerCache` — stage rendering that keeps the pixels of layers that do not
+  change. A key of what each top-level layer draws (elements, matrices,
+  colour effects, filters, nested symbol frames; shape graphs by their
+  immutable, pinned pointers) is computed on every render. Consecutive
+  layers whose keys have not changed for a few renders are drawn once into a
+  cropped image and composited afterwards; changing layers (animated, being
+  edited) and layers that blend with what lies below are drawn every time,
+  over the pixels below them (on the GPU the target is uploaded first). New
+  cached runs are assembled from older ones, so a layer that stops changing
+  joins its neighbours without redrawing them. A change of view, size or
+  options starts afresh.
+- `RhiRenderer` — the GPU path of the stage, on Qt RHI (Vulkan, Metal,
+  Direct3D 11/12, OpenGL; built with Qt 6.7+ and Qt Shader Tools). Same
+  techniques as `GlRenderer` below, with shaders written once in GLSL 4.40
+  and compiled by `qsb` into SPIR-V, GLSL, HLSL and MSL (`render/shaders`).
+  An `RhiSurface` records its draws and turns them into a render pass when
+  its pixels are needed (composited into a parent, shown or read); passes
+  are recorded in order, so render targets go back to a pool as soon as no
+  pending draw reads them. Uniforms and transient vertices live in per-frame
+  dynamic buffers, each draw in its own slice; gradients use rows of a ramp
+  atlas; shape geometry is cached per shape and scale bucket and kept alive
+  by the draws that use it. A surface that must read its own pixels (a blend
+  mode needing the destination, a colour transform) copies its texture and
+  starts a new pass from the copy. Filtered instances are drawn and filtered
+  on the CPU (`Surface::makeFilterLayer`) and uploaded, so nothing is ever
+  read back. `present()` shows the frame on a QRhiWidget's target with the
+  stage backdrop (margin, drop shadow, paper) drawn by a shader.
 - `GlRenderer` — the OpenGL path (3.3 core, or ES 3.0), on an offscreen
   context of the GUI thread:
   - fills and strokes use *stencil-then-cover* in a multisampled framebuffer:
@@ -220,11 +256,22 @@ object.
   Every change goes through `Editor::edit(label, fn)`: `fn` mutates a copy of the
   document, and if it returns `true` the old/new snapshots become one undo step.
   Live previews (dragging, drawing) use `setPreview()` without touching history.
+- `StageCanvas` — with RHI, the stage is a QRhiWidget that draws the frame
+  with `RhiRenderer` straight into the window, under a transparent
+  `StageOverlay` where tools paint their feedback with QPainter; both let
+  input through to the `StageView`. The backend is chosen once per run by
+  trying the preferred APIs on a real device (software devices are skipped).
 - `StageView` — the canvas: zoom/pan with animated transitions, tablet input
-  (pressure, tilt, rotation, eraser end), cached rendering, selection overlays,
-  tool cursors.
+  (pressure, tilt, rotation, eraser end), rendering through the `LayerCache`,
+  selection overlays, tool cursors. The rendered frame, the stage and its
+  cached backdrop are composed into one opaque image when the frame changes,
+  so repainting under tool feedback is a single copy.
+- `PropertiesPanel` rebuilds only when what it shows changes: moving the
+  playhead rebuilds just the Frame section, and edits that do not touch the
+  shown values (painting, moving other objects) leave it alone.
 - `tools/` — one class per tool; `DrawTools` (brush, eraser, pencil, paint
-  brush), `BasicTools` (shapes, pen, bucket, ink bottle, eyedropper, hand, zoom),
+  brush: its preview geometry and the final merge are computed on worker
+  threads), `BasicTools` (shapes, pen, bucket, ink bottle, eyedropper, hand, zoom),
   `SelectTools` (selection, subselection, free transform, lasso).
 - `panels/` — Tools, Timeline, Properties (with the filter stack and Animate's
   grouped blend list), Library, Color, Brushes (vector brush presets, per-kind
@@ -244,7 +291,9 @@ OLE2 and ZIP readers and both FLA importers on synthetic files (set
 `VERTEXA_FLA_SAMPLES` to a folder of real `.fla` files to import those too);
 `test_render` compares rendered pixels, filters included; `test_gpu`
 (opt-in with `VERTEXA_TEST_GPU=1`, CI runs it under Xvfb with Mesa) renders
-the same scenes on the GPU and the CPU and compares them; `test_app`
+the same scenes with every GPU path (OpenGL, RHI on Vulkan and on OpenGL)
+and the CPU and compares them; `test_stage_gpu` does the same for the whole
+stage shown through `StageCanvas`; `test_app`
 drives the real `StageView` with synthetic mouse events (drawing, erasing,
 selecting, bending, tweening, entering symbols) on the offscreen platform.
 

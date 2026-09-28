@@ -134,6 +134,30 @@ void compositeImage(QImage& dst, const QImage& src, QPoint offset, BlendMode mod
     const QRect area = QRect(offset, src.size()).intersected(dst.rect());
     if (area.isEmpty()) return;
     const float op = float(std::clamp(opacity, 0.0, 1.0));
+    if ((mode == BlendMode::Normal || mode == BlendMode::Layer) && !mask && op >= 1.0f) {
+        // Plain source-over, the common case: integer maths, opaque pixels copied.
+        for (int y = area.top(); y <= area.bottom(); ++y) {
+            auto* d = reinterpret_cast<uint32_t*>(dst.scanLine(y));
+            const auto* s = reinterpret_cast<const uint32_t*>(src.constScanLine(y - offset.y())) - offset.x();
+            for (int x = area.left(); x <= area.right(); ++x) {
+                const uint32_t sp = s[x];
+                const uint32_t sa = sp >> 24;
+                if (sa == 0) continue;
+                if (sa == 255) {
+                    d[x] = sp;
+                    continue;
+                }
+                const uint32_t inv = 255 - sa, dp = d[x];
+                auto over = [inv](uint32_t sc, uint32_t dc) {
+                    const uint32_t t = dc * inv + 128;
+                    return sc + ((t + (t >> 8)) >> 8);
+                };
+                d[x] = over(sa, dp >> 24) << 24 | over((sp >> 16) & 0xff, (dp >> 16) & 0xff) << 16 |
+                       over((sp >> 8) & 0xff, (dp >> 8) & 0xff) << 8 | over(sp & 0xff, dp & 0xff);
+            }
+        }
+        return;
+    }
     for (int y = area.top(); y <= area.bottom(); ++y) {
         auto* d = reinterpret_cast<uint32_t*>(dst.scanLine(y));
         const auto* s = reinterpret_cast<const uint32_t*>(src.constScanLine(y - offset.y()));

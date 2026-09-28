@@ -35,6 +35,20 @@ struct RenderOptions {
     /// other button shows Up.
     const Element* hotButton = nullptr;
     ButtonState hotState = ButtonState::Over;
+    /// When not empty: draw only the top-level layers whose entry is set
+    /// (indexed like Timeline::layers; a mask stands for its masked layers).
+    std::vector<char> onlyLayers;
+};
+
+/// What a top-level layer draws at a frame, for caching its pixels: equal
+/// keys draw equal pixels (as long as the pinned elements are kept alive, so
+/// that no other element can reuse their addresses).
+struct LayerKey {
+    uint64_t key = 0;
+    /// The layer blends with what lies below it (a layer or symbol blend
+    /// mode), so it cannot be drawn on its own.
+    bool backdrop = false;
+    std::vector<ElementPtr> pins;
 };
 
 class Renderer {
@@ -54,6 +68,11 @@ public:
                             const QRect& clip);
     static void renderOutline(QImage& target, const ShapeRenderData& rd, const Affine& m, const QColor& color,
                               const QRect& clip);
+
+    /// Top-level layers of `tl` drawn as one unit each (a mask with the
+    /// layers it masks), bottom to top.
+    std::vector<int> layerUnits(const Timeline& tl) const;
+    LayerKey layerKey(const Timeline& tl, int layerIndex, int frame) const;
 
     /// Convenience: render a scene frame at a scale with the stage background.
     static QImage renderFrame(const Document& doc, const Timeline& tl, int frame, double scale, bool transparent,
@@ -77,6 +96,12 @@ private:
         Affine sliceBase;
         Affine toSymbol;
     };
+    enum class Unit { None, Layer, Mask };
+    Unit unitOf(const Timeline& tl, int index, int depth) const;
+    struct KeyState;
+    void hashLayer(KeyState& k, const Timeline& tl, int index, int frame, int depth) const;
+    void hashElement(KeyState& k, const EvalItem& item, int depth) const;
+    void hashTimeline(KeyState& k, const Timeline& tl, int frame, int depth) const;
     void renderTimeline(Surface& target, const Timeline& tl, int frame, const Ctx& c);
     void renderLayerItems(Surface& target, const Timeline& tl, int layerIndex, int frame, const Ctx& c);
     void renderList(Surface& target, const std::vector<EvalItem>& items, const Ctx& c);

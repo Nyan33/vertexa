@@ -32,6 +32,22 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui OpenGL)
 if(VERTEXA_BUILD_APP)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets)
 endif()
+
+# The stage draws through Qt RHI (Vulkan, Metal, Direct3D, OpenGL) when Qt
+# has it: 6.7 or later (QRhiWidget) with Qt Shader Tools. Otherwise the
+# OpenGL / CPU paths are used.
+option(VERTEXA_ENABLE_RHI "Draw the stage through Qt RHI when Qt supports it" ON)
+set(VERTEXA_RHI OFF)
+if(VERTEXA_ENABLE_RHI AND Qt6_VERSION VERSION_GREATER_EQUAL 6.7)
+    find_package(Qt6 QUIET COMPONENTS ShaderTools)
+    if(NOT TARGET Qt6::GuiPrivate)
+        find_package(Qt6 QUIET COMPONENTS GuiPrivate)
+    endif()
+    if(Qt6ShaderTools_FOUND AND TARGET Qt6::GuiPrivate)
+        set(VERTEXA_RHI ON)
+    endif()
+endif()
+message(STATUS "Vertexa: RHI stage rendering: ${VERTEXA_RHI}")
 set(CMAKE_AUTOMOC ON)
 
 add_subdirectory(src/core)

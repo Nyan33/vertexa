@@ -4,8 +4,9 @@
 // response curve editor, segmented toggles and expressive section titles.
 #pragma once
 
-#include "core/VectorBrush.h"
+#include "core/BlendMode.h"
 #include "core/Style.h"
+#include "core/VectorBrush.h"
 
 #include <QColor>
 #include <QLabel>
@@ -13,6 +14,7 @@
 
 #include <functional>
 
+class QComboBox;
 class QLineEdit;
 class QVariantAnimation;
 class QButtonGroup;
@@ -193,6 +195,10 @@ private:
     double m_pos = 0; ///< animated indicator position
     QVariantAnimation* m_anim = nullptr;
 };
+
+/// Blend modes grouped as in Animate, then the extra ones (item data: the
+/// BlendMode as int).
+QComboBox* blendModeCombo(QWidget* parent, BlendMode current);
 
 /// Opens a floating colour picker next to `anchor`.
 void popupColorPicker(QWidget* anchor, const QColor& initial, const std::function<void(const QColor&, bool final)>& onChange);

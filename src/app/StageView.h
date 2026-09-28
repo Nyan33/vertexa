@@ -6,8 +6,14 @@
 #include "Editor.h"
 #include "tools/Tool.h"
 
+#include "render/LayerCache.h"
+#ifdef VERTEXA_HAVE_RHI
+#include "render/RhiRenderer.h"
+#endif
+
 #include <QElapsedTimer>
 #include <QImage>
+#include <QPair>
 #include <QWidget>
 
 #include <map>
@@ -43,6 +49,8 @@ public:
     /// True while a tool still computes finished work in the background
     /// (e.g. paint brush strokes being merged).
     bool hasPendingWork() const;
+    /// How the last frame was drawn (layers redrawn vs. taken from the cache).
+    const LayerCache::Stats& renderStats() const { return m_layers.stats(); }
     Tool* toolFor(ToolId id) const;
     void invalidate();
     void refreshCursor();
@@ -50,6 +58,21 @@ public:
     QColor colorAt(QPointF widgetPos) const;
     /// Custom cursors: "bend", "corner", "rotate".
     QCursor toolCursor(const QString& kind) const;
+
+    /// Draws and shows the stage on the GPU (through RHI) when possible;
+    /// otherwise on the CPU (or the OpenGL renderer).
+    void setGpuStage(bool on);
+    bool gpuStage() const { return m_gpuStage; }
+    /// "Vulkan — NVIDIA …" while the stage is on the GPU.
+    QString gpuStageDevice() const;
+    /// Draws the frame (dimmed parent, onion skins, the timeline) on `target`,
+    /// in device pixels.
+    void drawFrame(Surface& target);
+    /// Selection, guides and tool feedback over the stage.
+    void paintOverlays(QPainter& p);
+#ifdef VERTEXA_HAVE_RHI
+    RhiRenderer::Backdrop backdrop() const;
+#endif
 
 signals:
     void zoomChanged(double zoom);
@@ -73,7 +96,21 @@ protected:
     bool event(QEvent*) override;
 
 private:
+    /// A frame drawn under the current one: the dimmed parent timeline while
+    /// editing in place, onion skins.
+    struct Underlay {
+        const Timeline* timeline;
+        int frame;
+        Affine view;
+        ColorTransform ct;
+        RenderOptions opts;
+        double alpha;
+    };
+    std::vector<Underlay> underlays(const Document& d) const;
+    RenderOptions frameOptions() const;
+    Affine deviceView() const;
     void renderCache();
+    void composeView();
     void drawSelection(QPainter& p);
     void activateTool(ToolId id);
     ToolEvent makeEvent(QPointF widgetPos, Qt::KeyboardModifiers mods) const;
@@ -86,8 +123,17 @@ private:
     double m_zoom = 1.0;
     QPointF m_pan{0, 0};  ///< widget position of the stage origin
     bool m_placed = false;
-    QImage m_cache;
+    QImage m_cache;          ///< the rendered frame (transparent outside the artwork)
+    QImage m_view;           ///< backdrop, stage and m_cache composed, as painted
+    QImage m_backdrop;       ///< margin, drop shadow and stage colour
+    QRectF m_backdropStage;
+    QPair<QRgb, QRgb> m_backdropColors;
+    bool m_backdropDark = false;
+    LayerCache m_layers;
     bool m_cacheValid = false;
+    bool m_gpuStage = false;
+    QWidget* m_canvas = nullptr;  ///< StageCanvas (RHI builds)
+    QWidget* m_overlay = nullptr; ///< StageOverlay (RHI builds)
     bool m_spaceDown = false;
     bool m_panning = false;
     QPointF m_panAnchor;

@@ -330,7 +330,7 @@ void BrushPanel::refreshPreview()
 QGridLayout* BrushPanel::section(const QString& title)
 {
     auto* l = new QLabel(title.toUpper(), m_editor);
-    l->setStyleSheet(QString("color: %1; font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-top: 8px;").arg(Theme::p().accent.name()));
+    l->setProperty("role", "heading");
     m_editorLayout->addWidget(l);
     auto* box = new QWidget(m_editor);
     auto* g = new QGridLayout(box);
@@ -350,7 +350,7 @@ void BrushPanel::row(QGridLayout* g, const QString& label, QWidget* w)
         return;
     }
     auto* l = new QLabel(label, m_editor);
-    l->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text2.name()));
+    l->setProperty("role", "caption");
     g->addWidget(l, r, 0);
     g->addWidget(w, r, 1);
 }
@@ -372,7 +372,7 @@ void BrushPanel::rebuildEditor()
     name->setFont(Theme::display(18));
     m_editorLayout->addWidget(name);
     auto* kind = new QLabel(kindLabel(p.kind) + (isDocumentBrush(p.id) ? tr(" · saved in this document") : QString()), m_editor);
-    kind->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text3.name()));
+    kind->setProperty("role", "hint");
     m_editorLayout->addWidget(kind);
 
     QGridLayout* stroke = section(tr("Stroke"));
@@ -433,7 +433,7 @@ void BrushPanel::rebuildEditor()
         }
         auto* hint = new QLabel(tr("The artwork's width runs along the stroke and its height across it."), m_editor);
         hint->setWordWrap(true);
-        hint->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text3.name()));
+        hint->setProperty("role", "hint");
         row(art, {}, hint);
         break;
     }

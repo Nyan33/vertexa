@@ -3,10 +3,12 @@
 // check the resulting documents.
 #include "TestMain.h"
 
+#include "app/DemoDocument.h"
 #include "app/Editor.h"
 #include "app/MainWindow.h"
 #include "app/StageView.h"
 #include "app/Theme.h"
+#include "app/panels/PropertiesPanel.h"
 #include "core/DocumentOps.h"
 #include "core/Evaluate.h"
 #include "core/VectorBrush.h"
@@ -366,6 +368,51 @@ VX_TEST(main_window_smoke)
     }
     CHECK(ed.timeline().layers.size() >= 3);
     CHECK(ed.undoStack()->count() > 0);
+}
+
+VX_TEST(frame_changes_and_edits_redo_only_what_changed)
+{
+    Editor ed;
+    MainWindow w(&ed);
+    w.resize(1400, 900);
+    w.show();
+    ed.setDocument(createDemoDocument(), {});
+    QApplication::processEvents();
+    auto* panel = w.findChild<PropertiesPanel*>();
+    CHECK(panel != nullptr);
+    if (!panel) return;
+    ed.setFrame(3);
+    QApplication::processEvents();
+    QWidget* content = panel->widget();
+    for (int f : {4, 5, 6}) {
+        ed.setFrame(f);
+        QApplication::processEvents();
+    }
+    CHECK(panel->widget() == content); // only the Frame section was rebuilt
+    for (int i = 0; i < 6; ++i) {
+        w.stage()->invalidate();
+        w.stage()->repaint();
+    }
+    // Painting on another layer leaves the panel alone and redraws that layer only.
+    const Timeline& tl = ed.timeline();
+    int other = -1;
+    for (int i = 0; i < int(tl.layers.size()) && other < 0; ++i)
+        if (i != ed.layerIndex() && tl.layers[i].type == LayerType::Normal && !tl.layers[i].locked && tl.layers[i].keyAt(6)) other = i;
+    CHECK(other >= 0);
+    if (other < 0) return;
+    ed.edit("Paint", [&](Document& d) {
+        ed.mutableTimeline(d).layers[other].keyAt(6)->elements.push_back(
+            makeShapeElement(graphFromRegion(Region::circle({100, 100}, 30), FillStyle::solid(Color(0, 0, 0))), true));
+        return true;
+    });
+    QApplication::processEvents();
+    w.stage()->repaint();
+    CHECK(panel->widget() == content);
+    CHECK(w.stage()->renderStats().drawn < w.stage()->renderStats().layers);
+    // The current layer's opacity is shown in the panel: that rebuilds it.
+    ed.setLayerProperty(ed.layerIndex(), [](Layer& l) { l.opacity = 0.4; }, "Opacity");
+    QApplication::processEvents();
+    CHECK(panel->widget() != content);
 }
 
 int main(int argc, char** argv)

@@ -186,6 +186,111 @@ double DocumentDialog::width() const { return m_w->value(); }
 double DocumentDialog::height() const { return m_h->value(); }
 double DocumentDialog::fps() const { return m_fps->value(); }
 
+// --- LayerDialog -------------------------------------------------------------------------------------
+
+LayerDialog::LayerDialog(Editor* editor, int layerIndex, QWidget* parent)
+    : QDialog(parent), m_ed(editor), m_index(layerIndex), m_layer(editor->timeline().layers.at(layerIndex))
+{
+    setWindowTitle(tr("Layer Properties"));
+    auto* lay = new QVBoxLayout(this);
+    lay->setContentsMargins(20, 16, 20, 16);
+    lay->setSpacing(12);
+    lay->addWidget(new SectionTitle(tr("Layer"), this));
+    auto* g = new QGridLayout();
+    g->setHorizontalSpacing(14);
+    g->setVerticalSpacing(10);
+    int row = 0;
+    auto add = [&](const QString& label, QWidget* w) {
+        if (!label.isEmpty()) g->addWidget(caption(label, this), row, 0);
+        g->addWidget(w, row, label.isEmpty() ? 0 : 1, 1, label.isEmpty() ? 2 : 1);
+        ++row;
+    };
+    m_name = new QLineEdit(QString::fromStdString(m_layer.name), this);
+    add(tr("Name"), m_name);
+    m_type = new QComboBox(this);
+    m_type->addItems({tr("Normal"), tr("Guide"), tr("Mask"), tr("Folder")});
+    m_type->setCurrentIndex(int(m_layer.type));
+    add(tr("Type"), m_type);
+    m_opacity = new HotNumber(this);
+    m_opacity->setRange(0, 100);
+    m_opacity->setDecimals(0);
+    m_opacity->setSuffix("%");
+    m_opacity->setValue(m_layer.opacity * 100);
+    add(tr("Opacity"), m_opacity);
+    m_blend = blendModeCombo(this, m_layer.blend);
+    add(tr("Blending"), m_blend);
+    m_visible = new QCheckBox(tr("Show"), this);
+    m_visible->setChecked(m_layer.visible);
+    add({}, m_visible);
+    m_locked = new QCheckBox(tr("Lock"), this);
+    m_locked->setChecked(m_layer.locked);
+    add({}, m_locked);
+    m_outline = new QCheckBox(tr("View layer as outlines"), this);
+    m_outline->setChecked(m_layer.outline);
+    add({}, m_outline);
+    lay->addLayout(g);
+    lay->addWidget(okCancel(this));
+    resize(380, 0);
+    const bool folder = m_layer.type == LayerType::Folder;
+    m_opacity->setEnabled(!folder);
+    m_blend->setEnabled(!folder);
+
+    connect(m_opacity, &HotNumber::valueChanged, this, &LayerDialog::preview);
+    connect(m_opacity, &HotNumber::valueCommitted, this, &LayerDialog::preview);
+    connect(m_blend, qOverload<int>(&QComboBox::activated), this, &LayerDialog::preview);
+    for (QCheckBox* c : {m_visible, m_outline}) connect(c, &QCheckBox::toggled, this, &LayerDialog::preview);
+}
+
+LayerDialog::~LayerDialog() { m_ed->setPreview(std::nullopt); }
+
+Layer LayerDialog::values() const
+{
+    Layer l = m_layer;
+    l.name = m_name->text().trimmed().isEmpty() ? m_layer.name : m_name->text().trimmed().toStdString();
+    l.type = LayerType(m_type->currentIndex());
+    l.opacity = std::clamp(m_opacity->value() / 100.0, 0.0, 1.0);
+    const QVariant blend = m_blend->currentData();
+    if (blend.isValid()) l.blend = BlendMode(blend.toInt());
+    l.visible = m_visible->isChecked();
+    l.locked = m_locked->isChecked();
+    l.outline = m_outline->isChecked();
+    return l;
+}
+
+void LayerDialog::preview()
+{
+    Document d = m_ed->doc();
+    std::vector<Layer>& layers = m_ed->mutableTimeline(d).layers;
+    if (m_index < 0 || m_index >= int(layers.size())) return;
+    const Layer v = values();
+    Layer& l = layers[m_index];
+    l.opacity = v.opacity;
+    l.blend = v.blend;
+    l.visible = v.visible;
+    l.outline = v.outline;
+    m_ed->setPreview(std::move(d));
+}
+
+void LayerDialog::edit(Editor* editor, int layerIndex, QWidget* parent)
+{
+    if (layerIndex < 0 || layerIndex >= int(editor->timeline().layers.size())) return;
+    Layer v;
+    {
+        LayerDialog dlg(editor, layerIndex, parent);
+        if (dlg.exec() != QDialog::Accepted) return;
+        v = dlg.values();
+    }
+    editor->setLayerProperty(layerIndex, [&v](Layer& l) {
+        l.name = v.name;
+        l.type = v.type;
+        l.opacity = v.opacity;
+        l.blend = v.blend;
+        l.visible = v.visible;
+        l.locked = v.locked;
+        l.outline = v.outline;
+    }, tr("Layer Properties"));
+}
+
 // --- TabletDialog ------------------------------------------------------------------------------------
 
 namespace {

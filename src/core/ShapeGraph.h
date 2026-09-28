@@ -18,6 +18,7 @@
 #include "geom/Region.h"
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace vx {
@@ -88,16 +89,25 @@ public:
 
     /// Must be called after editing edges/styles of a graph whose caches may
     /// already have been built. Copies never inherit caches.
-    void invalidate() const { m_cache.render.reset(); m_cache.topology.reset(); }
+    void invalidate() const
+    {
+        std::lock_guard lock(m_cache.mutex);
+        m_cache.render.reset();
+        m_cache.topology.reset();
+    }
 
 private:
+    /// Built on first use; shared graphs are read (rendered, merged) from
+    /// several threads at once.
     struct Cache {
+        std::mutex mutex;
         std::shared_ptr<ShapeRenderData> render;
         std::shared_ptr<Arrangement> topology;
         Cache() = default;
         Cache(const Cache&) {}
         Cache& operator=(const Cache&)
         {
+            std::lock_guard lock(mutex);
             render.reset();
             topology.reset();
             return *this;

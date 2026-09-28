@@ -37,6 +37,9 @@ public:
 
     /// A new transparent surface of the same kind, for isolated drawing.
     virtual std::unique_ptr<Surface> makeLayer(QSize size) = 0;
+    /// A surface for a filtered instance: filters run on the CPU, so a GPU
+    /// surface hands out a CPU one (and composites it by uploading it).
+    virtual std::unique_ptr<Surface> makeFilterLayer(QSize size) { return makeLayer(size); }
     /// Composites `layer` (made by makeLayer) at `at` with a blend mode.
     virtual void composite(Surface& layer, QPoint at, BlendMode mode, double opacity) = 0;
     /// Multiplies this surface by the alpha of `mask` (same size).

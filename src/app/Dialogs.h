@@ -51,6 +51,31 @@ private:
     Color m_bg;
 };
 
+/// Layer Properties (double-click a layer's icon): name, type, visibility,
+/// lock, outline, opacity and blending. Opacity and blending show on the
+/// stage while the dialog is open.
+class LayerDialog : public QDialog {
+    Q_OBJECT
+public:
+    LayerDialog(Editor* editor, int layerIndex, QWidget* parent = nullptr);
+    ~LayerDialog() override;
+    /// Opens the dialog and applies the result as one undo step.
+    static void edit(Editor* editor, int layerIndex, QWidget* parent);
+
+private:
+    Layer values() const;
+    void preview();
+
+    Editor* m_ed;
+    int m_index;
+    Layer m_layer;
+    QLineEdit* m_name;
+    QComboBox* m_type;
+    QCheckBox *m_visible, *m_locked, *m_outline;
+    HotNumber* m_opacity;
+    QComboBox* m_blend;
+};
+
 class TabletDialog : public QDialog {
     Q_OBJECT
 public:
