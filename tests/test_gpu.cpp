@@ -4,10 +4,12 @@
 // differ slightly from exact coverage, everything else must match.
 //
 // Every GPU path available is checked: the OpenGL renderer and, when built
-// with RHI, the RHI renderer on Vulkan and on OpenGL.
+// with RHI, the RHI renderer on Vulkan and on OpenGL (and Direct3D 11 / 12
+// on Windows).
 //
 // Opt-in: set VERTEXA_TEST_GPU=1 (CI runs it under xvfb-run with Mesa's
-// software OpenGL and Vulkan). Paths without a device are skipped.
+// software OpenGL and Vulkan, and on Windows with WARP). Paths without a
+// device are skipped.
 #include "TestMain.h"
 
 #include "core/DocumentOps.h"
@@ -59,7 +61,14 @@ std::vector<Backend>& backends()
         std::printf("  no OpenGL 3.3 / ES 3.0 context: OpenGL renderer skipped\n");
     }
 #ifdef VERTEXA_HAVE_RHI
-    for (const char* api : {"vulkan", "opengl"}) {
+    // Windows runners have no GPU, but WARP (Direct3D in software) runs the
+    // same Direct3D code paths as a graphics card.
+#ifdef Q_OS_WIN
+    const std::initializer_list<const char*> apis = {"d3d11", "d3d12", "vulkan", "opengl"};
+#else
+    const std::initializer_list<const char*> apis = {"vulkan", "opengl"};
+#endif
+    for (const char* api : apis) {
         QString why;
         std::shared_ptr<RhiRenderer> rhi = RhiRenderer::createOffscreen(api, &why);
         if (!rhi || !rhi->isValid()) {
@@ -250,6 +259,36 @@ VX_TEST(gpu_blend_modes_and_colour_effects)
         d.scenes[0].layers[0].keys[0].elements = {holder};
         CHECK(sameOnGpu(d, d.scenes[0], 0, {400, 300}, Affine{}, mode == BlendMode::Alpha ? "blend alpha" : "blend erase"));
     }
+}
+
+VX_TEST(gpu_many_isolated_layers_in_one_frame)
+{
+    if (!haveGpu()) return;
+    // Each blended instance draws into a pooled render target. A target must
+    // not go back to the pool before the pass that reads it (the next layer
+    // drew over it: the first instance vanished), and nothing a frame uses
+    // may be freed before Direct3D 11 runs its commands at the frame's end
+    // (a crash seen on real files with many such layers).
+    Document d = compositingScene(BlendMode::Normal);
+    Timeline& tl = d.scenes[0];
+    const auto proto = tl.layers[0].keys[0].elements.front();
+    const BlendMode modes[] = {BlendMode::Multiply, BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference,
+                               BlendMode::HardLight, BlendMode::Lighten, BlendMode::Darken, BlendMode::Add};
+    std::vector<ElementPtr> many;
+    for (int i = 0; i < 24; ++i) {
+        auto e = proto->cloneAs<InstanceElement>();
+        e->matrix = Affine::translate(30 + (i % 6) * 64, 40 + (i / 6) * 64) * Affine::scale(0.25 + 0.05 * (i % 7));
+        e->blend = modes[i % 8];
+        if (i % 5 == 0) {
+            e->color.kind = ColorEffect::Kind::Alpha;
+            e->color.alpha = 0.6;
+        }
+        many.push_back(e);
+    }
+    tl.layers[0].keys[0].elements = many;
+    // Frames in a row reuse the pooled targets.
+    for (int frame = 0; frame < 3; ++frame)
+        CHECK(sameOnGpu(d, tl, 0, {420, 320}, Affine{}, qPrintable(QString("many layers #%1").arg(frame + 1))));
 }
 
 VX_TEST(gpu_layer_cache_draws_over_cached_layers)

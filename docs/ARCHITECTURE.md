@@ -229,7 +229,10 @@ object.
   An `RhiSurface` records its draws and turns them into a render pass when
   its pixels are needed (composited into a parent, shown or read); passes
   are recorded in order, so render targets go back to a pool as soon as no
-  pending draw reads them. Uniforms and transient vertices live in per-frame
+  pending draw reads them (spares not asked for in 120 frames, or beyond
+  512 MB, are freed; depth-stencil buffers are shared by the targets of a
+  size). Every RHI resource is freed with `deleteLater()`: Direct3D 11 runs
+  a frame's commands only when the frame ends. Uniforms and transient vertices live in per-frame
   dynamic buffers, each draw in its own slice; gradients use rows of a ramp
   atlas; shape geometry is cached per shape and scale bucket and kept alive
   by the draws that use it. A surface that must read its own pixels (a blend
@@ -329,9 +332,9 @@ symbols and serialization; `test_brush` the vector brushes; `test_fla` the
 OLE2 and ZIP readers and both FLA importers on synthetic files (set
 `VERTEXA_FLA_SAMPLES` to a folder of real `.fla` files to import those too);
 `test_render` compares rendered pixels, filters included; `test_gpu`
-(opt-in with `VERTEXA_TEST_GPU=1`, CI runs it under Xvfb with Mesa) renders
-the same scenes with every GPU path (OpenGL, RHI on Vulkan and on OpenGL)
-and the CPU and compares them; `test_stage_gpu` does the same for the whole
+(opt-in with `VERTEXA_TEST_GPU=1`, CI runs it under Xvfb with Mesa and on
+Windows with WARP) renders the same scenes with every GPU path (OpenGL, RHI
+on Vulkan, OpenGL and Direct3D 11 / 12) and the CPU and compares them; `test_stage_gpu` does the same for the whole
 stage shown through `StageCanvas`; `test_crash` runs itself again to crash
 in several ways (invalid access, abort, uncaught exception, qFatal, a worker
 thread, a killed run) and checks the report, the log, the saved work and what

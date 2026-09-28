@@ -3,7 +3,8 @@
 // stage drawn on the CPU: the same window is grabbed both ways and compared.
 //
 // Opt-in like test_gpu: VERTEXA_TEST_GPU=1 with a window system (CI runs it
-// under xvfb-run with Mesa's Vulkan and OpenGL). Needs a build with RHI.
+// under xvfb-run with Mesa's Vulkan and OpenGL, and on Windows with Direct3D
+// in software). Needs a build with RHI.
 #include "TestMain.h"
 
 #include "app/DemoDocument.h"
@@ -157,9 +158,11 @@ VX_TEST(gpu_stage_paints_and_follows_edits)
 
 int main(int argc, char** argv)
 {
+#if !defined(Q_OS_WIN) && !defined(Q_OS_APPLE)
     if (qEnvironmentVariableIsEmpty("DISPLAY") && qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY") &&
         qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
         qputenv("QT_QPA_PLATFORM", "offscreen");
+#endif
     // Software Vulkan / OpenGL (Mesa in CI) is fine for checking pixels.
     qputenv("VERTEXA_GPU", "force");
     QApplication app(argc, argv);
