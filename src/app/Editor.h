@@ -148,6 +148,8 @@ public:
     void setFilePath(const QString& p);
     bool isDirty() const;
     void markClean();
+    /// Unsaved changes without an undo step (recovered work).
+    void markDirty();
     QUndoStack* undoStack() const { return m_undo; }
 
     /// Apply `fn` to a copy of the document and record an undo step when

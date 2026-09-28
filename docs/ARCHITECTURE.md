@@ -280,6 +280,22 @@ object.
   what is under the pointer). The rendered frame, the stage and its
   cached backdrop are composed into one opaque image when the frame changes,
   so repainting under tool feedback is a single copy.
+- `CrashHandler` — logs and crash reports. A Qt message handler writes
+  every message (and the `vx.*` breadcrumbs: edits, undo, tools, files,
+  renderer) to the run's log and to a fixed ring buffer. Crashes are caught
+  by signal handlers on an alternate stack (SIGSEGV, SIGBUS, SIGFPE, SIGILL,
+  SIGABRT) on Linux and macOS, by an unhandled-exception filter plus the CRT's
+  abort / pure-call / invalid-parameter hooks on Windows, by a terminate
+  handler (the message of an uncaught exception) and by the message handler
+  for qFatal. The handler only uses what was prepared at start (paths, the
+  header with version, system, Qt and context, the ring buffer) and plain
+  system calls: it writes the report — header, crash, stack
+  (`backtrace_symbols_fd`; `StackWalk64` with the PDB and a minidump on
+  Windows), the log — then, with a timer against hangs, saves unsaved work
+  through a callback and adds a demangled stack. Each run holds a lock file;
+  the next start finds the stale ones (`uncleanSessions`) and `MainWindow`
+  shows `CrashDialog` with the report and the recovered work. Unsaved work
+  is also written every two minutes, off the GUI thread.
 - `PropertiesPanel` rebuilds only when what it shows changes: moving the
   playhead rebuilds just the Frame section, and edits that do not touch the
   shown values (painting, moving other objects) leave it alone.
@@ -316,7 +332,10 @@ OLE2 and ZIP readers and both FLA importers on synthetic files (set
 (opt-in with `VERTEXA_TEST_GPU=1`, CI runs it under Xvfb with Mesa) renders
 the same scenes with every GPU path (OpenGL, RHI on Vulkan and on OpenGL)
 and the CPU and compares them; `test_stage_gpu` does the same for the whole
-stage shown through `StageCanvas`; `test_app`
+stage shown through `StageCanvas`; `test_crash` runs itself again to crash
+in several ways (invalid access, abort, uncaught exception, qFatal, a worker
+thread, a killed run) and checks the report, the log, the saved work and what
+the next start finds; `test_app`
 drives the real `StageView` with synthetic mouse events (drawing, erasing,
 selecting, bending, tweening, entering symbols) on the offscreen platform.
 

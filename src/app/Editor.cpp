@@ -5,11 +5,15 @@
 #include "core/Evaluate.h"
 #include "core/TimelineOps.h"
 
+#include <QLoggingCategory>
 #include <QTimer>
 #include <QUndoCommand>
 #include <QUndoStack>
 
 namespace vx::app {
+
+// What the user did, for the log and crash reports.
+Q_LOGGING_CATEGORY(lcEdit, "vx.edit")
 
 double ToolSettings::gapPixels() const
 {
@@ -29,13 +33,18 @@ public:
           m_sa(std::move(sa))
     {
     }
-    void undo() override { m_editor->restore(m_before, m_sb); }
+    void undo() override
+    {
+        qCInfo(lcEdit).noquote() << "Undo:" << text();
+        m_editor->restore(m_before, m_sb);
+    }
     void redo() override
     {
         if (m_first) {
             m_first = false;
             return;
         }
+        qCInfo(lcEdit).noquote() << "Redo:" << text();
         m_editor->restore(m_after, m_sa);
     }
 
@@ -70,6 +79,7 @@ void Editor::setPreview(std::optional<Document> d)
 
 void Editor::setDocument(Document d, const QString& path)
 {
+    qCInfo(lcEdit).noquote() << "Document:" << (path.isEmpty() ? QString("untitled") : path) << QString("(%1 symbols, %2 scenes)").arg(d.symbols.size()).arg(d.scenes.size());
     setPlaying(false);
     m_doc = std::move(d);
     m_preview.reset();
@@ -99,6 +109,12 @@ void Editor::setFilePath(const QString& p)
 }
 
 bool Editor::isDirty() const { return !m_undo->isClean(); }
+void Editor::markDirty()
+{
+    m_undo->resetClean();
+    emit pathChanged();
+}
+
 void Editor::markClean()
 {
     m_undo->setClean();
@@ -107,6 +123,7 @@ void Editor::markClean()
 
 bool Editor::edit(const QString& label, const std::function<bool(Document&)>& fn)
 {
+    qCInfo(lcEdit).noquote() << "Edit:" << label << QString("(frame %1, layer %2)").arg(m_frame + 1).arg(m_layer);
     const bool hadPreview = m_preview.has_value();
     m_preview.reset();
     Document d = m_doc;
@@ -532,6 +549,7 @@ void Editor::notify(const QString& msg) { emit message(msg); }
 void Editor::setTool(ToolId t)
 {
     if (t == m_tool) return;
+    qCInfo(lcEdit).noquote() << "Tool:" << toolName(t);
     m_tool = t;
     emit toolChanged(t);
 }

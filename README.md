@@ -179,6 +179,31 @@ The builds are not code-signed yet. On macOS, open the app the first time with
 right-click → *Open*; on Windows choose *More info → Run anyway* if SmartScreen
 asks; on Linux run `chmod +x` on the AppImage.
 
+## Crash reports and logs
+
+Every run keeps a log (Qt messages plus what you did: edits, tools, files
+opened and saved, the renderer). If Vertexa crashes, it writes a **crash
+report** — version and build, system, Qt, renderer, screen, the document, the
+last lines of the log and the call stack of the crashing thread (with
+function names; on Windows a minidump too, and the `vertexa.pdb` in the zip
+names the functions) — and saves your **unsaved work**. Unsaved work is also
+kept every two minutes.
+
+The next start shows what happened: copy the report, open its folder, file
+an issue on GitHub with the report filled in (look it over first: it holds
+file paths), and **restore the unsaved work** as an unsaved copy. *Help ▸
+Logs and Crash Reports* opens the folder at any time:
+
+| System | Folder |
+|---|---|
+| Windows | `%LOCALAPPDATA%\Vertexa\Vertexa` |
+| macOS | `~/Library/Application Support/Vertexa/Vertexa` |
+| Linux | `~/.local/share/Vertexa/Vertexa` |
+
+(`crashes/`, `logs/`, `recovery/`; `VERTEXA_CRASH_DIR` points elsewhere.)
+`VERTEXA_CRASH_TEST=segv|abort|exception` makes the app crash a second after
+start, to see the whole thing work.
+
 ## Building
 
 Requirements: a C++20 compiler (GCC 11+, Clang 14+, MSVC 2022), CMake 3.21+,

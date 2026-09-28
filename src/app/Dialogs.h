@@ -2,11 +2,13 @@
 // Vertexa — dialogs: Convert to Symbol, Document, Tablet, Export, Hotkeys.
 #pragma once
 
+#include "CrashHandler.h"
 #include "Editor.h"
 
 #include <QDialog>
 
 class QAction;
+class QUrl;
 class QCheckBox;
 class QComboBox;
 class QLineEdit;
@@ -114,6 +116,21 @@ class HotkeysDialog : public QDialog {
     Q_OBJECT
 public:
     HotkeysDialog(const QList<QAction*>& actions, QWidget* parent = nullptr);
+};
+
+/// Shown at start when the last run crashed or was killed: its report
+/// (copy it, open the folder, file an issue) and restoring unsaved work.
+class CrashDialog : public QDialog {
+    Q_OBJECT
+public:
+    enum class Choice { Close, Restore, Discard };
+    explicit CrashDialog(const crash::Session& session, QWidget* parent = nullptr);
+    Choice choice() const { return m_choice; }
+    /// New GitHub issue with the report filled in.
+    static QUrl issueUrl(const QString& report, const QString& reportPath);
+
+private:
+    Choice m_choice = Choice::Close;
 };
 
 } // namespace vx::app

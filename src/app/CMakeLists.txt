@@ -3,6 +3,7 @@ add_library(vx_app STATIC
     Icons.h Icons.cpp
     Widgets.h Widgets.cpp
     Editor.h Editor.cpp EditorCommands.cpp
+    CrashHandler.h CrashHandler.cpp
     StageView.h StageView.cpp
     StageCanvas.h StageCanvas.cpp
     Dialogs.h Dialogs.cpp
@@ -22,6 +23,15 @@ add_library(vx_app STATIC
 target_include_directories(vx_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(vx_app PUBLIC vx_render Qt6::Widgets)
 target_compile_definitions(vx_app PUBLIC VERTEXA_VERSION="${PROJECT_VERSION}")
+# Crash reports name the build: the commit on CI, "local" otherwise.
+set(VERTEXA_BUILD_ID "local")
+if(DEFINED ENV{GITHUB_SHA})
+    string(SUBSTRING "$ENV{GITHUB_SHA}" 0 10 VERTEXA_BUILD_ID)
+endif()
+set_source_files_properties(CrashHandler.cpp PROPERTIES COMPILE_DEFINITIONS VERTEXA_BUILD_ID="${VERTEXA_BUILD_ID}")
+if(WIN32)
+    target_link_libraries(vx_app PRIVATE dbghelp)
+endif()
 
 qt_add_executable(vertexa WIN32 MACOSX_BUNDLE main.cpp)
 
@@ -49,6 +59,8 @@ qt_add_resources(vertexa "fonts"
 )
 
 target_link_libraries(vertexa PRIVATE vx_app)
+# Function names in the stacks of crash reports (Linux).
+set_target_properties(vertexa PROPERTIES ENABLE_EXPORTS ON)
 set_target_properties(vertexa PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "Vertexa"
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.vertexa.Vertexa"

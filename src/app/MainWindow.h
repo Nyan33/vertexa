@@ -23,6 +23,9 @@ public:
     QAction* action(const QString& name) const { return m_actions.value(name); }
     bool openFile(const QString& path);
     StageView* stage() const { return m_stage; }
+    /// After a crash (or a killed run): shows the report and offers to
+    /// restore the unsaved work kept from it.
+    void checkLastSession();
 
 protected:
     void closeEvent(QCloseEvent*) override;
@@ -56,6 +59,8 @@ private:
     void toggleEditSymbol();
     /// Right-click menu of the stage (the selection is already set).
     void stageContextMenu(const QPoint& globalPos);
+    /// Keeps unsaved work in the recovery file (every two minutes).
+    void autosave();
 
     Editor* m_ed;
     StageView* m_stage = nullptr;
