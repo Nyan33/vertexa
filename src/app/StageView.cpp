@@ -288,9 +288,47 @@ void StageView::renderCache()
     o.hotButton = m_hotButton;
     o.hotState = m_buttonDown ? ButtonState::Down : ButtonState::Over;
     const bool empty = !m_ed->inSymbol() && !(m_ed->onionSkin && !m_ed->isPlaying());
-    renderAccelerated(m_cache, d, tl, m_ed->frame(), ctx, {}, o, empty);
+    QString context = QString::number(m_ed->scene());
+    for (const ContextEntry& c : m_ed->contextStack()) context += '/' + QString::fromStdString(c.symbolId);
+    m_layers.render(m_cache, d, tl, m_ed->frame(), ctx, o, context, empty);
     m_cache.setDevicePixelRatio(dpr);
+    composeView();
     m_cacheValid = true;
+}
+
+void StageView::composeView()
+{
+    // Everything under the tool overlays in one opaque image: painting the
+    // stage (on every pointer move while a tool shows feedback) is then a
+    // plain copy. The backdrop (margin, drop shadow, stage colour) is kept
+    // until the view or the stage changes.
+    const qreal dpr = devicePixelRatioF();
+    const ui::Palette& pal = ui::Theme::p();
+    const Document& d = m_ed->displayDoc();
+    const QRectF stage = toQTransform(stageToWidget()).mapRect(QRectF(0, 0, d.width, d.height));
+    const QColor margin = pal.dark ? ui::mix(pal.bg0, pal.bg1, 0.35) : ui::mix(pal.bg0, pal.bg1, 0.2);
+    const QColor paper = toQColor(d.background);
+    if (m_backdrop.size() != m_cache.size() || m_backdropStage != stage || m_backdropColors != qMakePair(margin.rgba(), paper.rgba()) ||
+        m_backdropDark != pal.dark) {
+        m_backdrop = QImage(m_cache.size(), QImage::Format_RGB32);
+        m_backdrop.setDevicePixelRatio(dpr);
+        QPainter p(&m_backdrop);
+        p.fillRect(QRectF(QPointF(0, 0), QSizeF(width(), height())), margin);
+        // Soft drop shadow under the stage.
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0, 0, 0, pal.dark ? 16 : 8));
+        for (int i = 6; i >= 1; --i) p.drawRoundedRect(stage.adjusted(-i, -i + 3, i, i + 3), i, i);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.fillRect(stage, paper);
+        p.end();
+        m_backdropStage = stage;
+        m_backdropColors = qMakePair(margin.rgba(), paper.rgba());
+        m_backdropDark = pal.dark;
+    }
+    m_view = m_backdrop.copy();
+    m_view.setDevicePixelRatio(dpr);
+    compositeImage(m_view, m_cache, QPoint(0, 0), BlendMode::Normal, 1.0);
 }
 
 void StageView::drawSelection(QPainter& p)
@@ -356,23 +394,10 @@ void StageView::drawSelection(QPainter& p)
 
 void StageView::paintEvent(QPaintEvent*)
 {
+    if (!m_cacheValid) renderCache();
     QPainter p(this);
     const ui::Palette& pal = ui::Theme::p();
-    const Document& d = m_ed->displayDoc();
-    p.fillRect(rect(), pal.dark ? ui::mix(pal.bg0, pal.bg1, 0.35) : ui::mix(pal.bg0, pal.bg1, 0.2));
-    const QRectF stage = toQTransform(stageToWidget()).mapRect(QRectF(0, 0, d.width, d.height));
-    // Soft drop shadow under the stage.
-    p.setRenderHint(QPainter::Antialiasing);
-    for (int i = 6; i >= 1; --i) {
-        QColor s(0, 0, 0, pal.dark ? 16 : 8);
-        p.setPen(Qt::NoPen);
-        p.setBrush(s);
-        p.drawRoundedRect(stage.adjusted(-i, -i + 3, i, i + 3), i, i);
-    }
-    p.setRenderHint(QPainter::Antialiasing, false);
-    p.fillRect(stage, toQColor(d.background));
-    if (!m_cacheValid) renderCache();
-    p.drawImage(QPointF(0, 0), m_cache);
+    p.drawImage(QPointF(0, 0), m_view);
 
     if (m_ed->inSymbol()) {
         // Registration point of the symbol being edited.

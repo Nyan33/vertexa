@@ -47,6 +47,9 @@ arrangement that splits curves at their true intersections and labels faces
   multisampling, blend modes, masks and colour effects in shaders. Without
   one (or with a software OpenGL) the CPU renderer takes over. Toggle it in
   *View ▸ GPU Rendering*; `VERTEXA_GPU=0` turns it off at start.
+- **Stays responsive** — layers that do not change are kept as pixels and only
+  the layers being animated or edited are drawn again; large frames are
+  rasterised on all cores; brush previews are built on a worker thread.
 
 **Timeline.** Layers, folders, mask and motion-guide layers, visibility / lock /
 outline toggles, keyframes, blank keyframes, spans, labels, onion skin, drag to
@@ -54,6 +57,9 @@ move frames and layers, and the familiar keys: `F5`, `Shift+F5`, `F6`,
 `Shift+F6`, `F7`, `Enter`, `,` `.`, `Ctrl+Alt+C/X/V`… ([all shortcuts](docs/HOTKEYS.md)).
 Loop playback (`Alt+Shift+L`) plays the frames between the bracket on the
 ruler; drag its ends to choose them.
+Layers have their own **opacity** and **blending**: double-click a layer's icon
+(Layer Properties), use *Opacity* in its context menu, or the Layer section of
+the Properties panel; the timeline shows them next to the layer name.
 
 **Symbols.**
 - Movie clips, graphics and buttons in a library with **folders** (drag

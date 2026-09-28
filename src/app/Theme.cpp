@@ -203,6 +203,9 @@ QSplitter::handle { background: %bg0%; }
 QGroupBox { border: 1px solid %line%; border-radius: 10px; margin-top: 14px; padding-top: 10px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: %text2%; }
 QStatusBar { background: %bg0%; color: %text3%; }
+QLabel[role="caption"] { color: %text2%; font-size: 11px; }
+QLabel[role="hint"] { color: %text3%; font-size: 11px; }
+QLabel[role="heading"] { color: %accent%; font-size: 11px; font-weight: 700; letter-spacing: 1px; padding-top: 8px; }
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
 )");

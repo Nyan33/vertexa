@@ -93,6 +93,7 @@ Crop) are in the Modify menu without a default key, as in Animate.
 | Add Shape Hint | `Ctrl+Shift+H` |
 | Clear Frames | `Alt+Backspace` |
 | Cut / Copy / Paste Frames | `Ctrl+Alt+X` / `Ctrl+Alt+C` / `Ctrl+Alt+V` |
+| Layer Properties (name, type, opacity, blending) | double-click the layer icon; Modify ▸ Timeline ▸ Layer Properties… |
 | Select All Frames | `Ctrl+Alt+A` |
 | New Layer | `Ctrl+Alt+N` |
 | New Symbol | `Ctrl+F8` |

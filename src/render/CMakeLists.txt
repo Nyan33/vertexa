@@ -6,6 +6,7 @@ add_library(vx_render STATIC
     Surface.h Surface.cpp
     Renderer.h Renderer.cpp
     GlRenderer.h GlRenderer.cpp
+    LayerCache.h LayerCache.cpp
     SvgExport.h SvgExport.cpp
 )
 target_include_directories(vx_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

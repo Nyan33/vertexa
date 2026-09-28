@@ -289,11 +289,7 @@ void Editor::setFrame(int f)
     f = std::max(0, f);
     if (f == m_frame) return;
     m_frame = f;
-    if (!m_playing) {
-        m_selection.clear();
-        m_shapePick = {};
-        emit selectionChanged();
-    }
+    if (!m_playing) clearSelection();
     emit frameChanged(m_frame);
 }
 

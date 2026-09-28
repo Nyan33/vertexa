@@ -6,10 +6,16 @@
 #include "QtConvert.h"
 #include "Raster.h"
 
+#include <QCoreApplication>
 #include <QPainter>
+#include <QSemaphore>
+#include <QThread>
+#include <QThreadPool>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <functional>
 
 namespace vx {
 
@@ -59,6 +65,24 @@ QRect deviceRect(const Rect& r)
     if (r.isEmpty()) return {};
     return QRect(QPoint(int(std::floor(r.x0)) - 1, int(std::floor(r.y0)) - 1),
                  QPoint(int(std::ceil(r.x1)) + 1, int(std::ceil(r.y1)) + 1));
+}
+
+} // namespace
+
+namespace {
+
+int renderThreads() { return std::clamp(QThread::idealThreadCount(), 1, 16); }
+
+QThreadPool& renderPool()
+{
+    static QThreadPool pool;
+    static const bool init = [] {
+        pool.setMaxThreadCount(renderThreads());
+        pool.setExpiryTimeout(30000);
+        return true;
+    }();
+    (void)init;
+    return pool;
 }
 
 } // namespace
@@ -128,8 +152,36 @@ bool Renderer::layerHidden(const Timeline& tl, int index) const
 
 void Renderer::render(QImage& target, const Timeline& tl, int frame, const Affine& view, const ColorTransform& ct)
 {
-    CpuSurface surface(target);
-    render(surface, tl, frame, view, ct);
+    // Large frames are drawn in horizontal bands on all cores. Each band is
+    // an image over the target's own rows, so nothing drawn for one band
+    // (a filter margin, an isolated layer) can reach another; every band
+    // walks the document itself and skips what lies outside it.
+    const int h = target.height();
+    const qint64 pixels = qint64(target.width()) * h;
+    int bands = std::min<qint64>(renderThreads(), pixels / (192 * 1024));
+    bands = std::min(bands, h / 32);
+    const QCoreApplication* app = QCoreApplication::instance();
+    if (bands <= 1 || !app || QThread::currentThread() != app->thread()) {
+        CpuSurface surface(target);
+        render(surface, tl, frame, view, ct);
+        return;
+    }
+    uchar* bits = target.bits(); // detaches before the bands share the rows
+    const qsizetype bpl = target.bytesPerLine();
+    auto band = [&](int b) {
+        const int y0 = int(qint64(h) * b / bands), y1 = int(qint64(h) * (b + 1) / bands);
+        QImage rows(bits + y0 * bpl, target.width(), y1 - y0, bpl, target.format());
+        CpuSurface surface(rows);
+        Renderer(m_doc, m_opts).render(surface, tl, frame, Affine::translate(0, -y0) * view, ct);
+    };
+    QSemaphore done;
+    for (int b = 1; b < bands; ++b)
+        renderPool().start([&band, &done, b]() {
+            band(b);
+            done.release();
+        });
+    band(0);
+    done.acquire(bands - 1);
 }
 
 void Renderer::render(Surface& target, const Timeline& tl, int frame, const Affine& view, const ColorTransform& ct)
@@ -152,38 +204,206 @@ void Renderer::renderItems(QImage& target, const std::vector<EvalItem>& items, c
     renderList(surface, items, c);
 }
 
+Renderer::Unit Renderer::unitOf(const Timeline& tl, int i, int depth) const
+{
+    const Layer& l = tl.layers[i];
+    if (l.type == LayerType::Folder) return Unit::None;
+    if (layerHidden(tl, i)) return Unit::None;
+    if (l.type == LayerType::Guide && (!m_opts.showGuides || depth > 0)) return Unit::None;
+    // Masked layers are drawn together with their (active) mask.
+    if (const Layer* mask = tl.maskOf(i)) {
+        const bool active = !m_opts.masksNeedLock || mask->locked;
+        if (active && mask->visible) return Unit::None;
+    }
+    if (l.type == LayerType::Mask && (!m_opts.masksNeedLock || l.locked)) return Unit::Mask;
+    return Unit::Layer;
+}
+
+std::vector<int> Renderer::layerUnits(const Timeline& tl) const
+{
+    std::vector<int> out;
+    for (int i = int(tl.layers.size()) - 1; i >= 0; --i)
+        if (unitOf(tl, i, 0) != Unit::None) out.push_back(i);
+    return out;
+}
+
+// --- Layer keys ---------------------------------------------------------------------
+
+struct Renderer::KeyState {
+    uint64_t h = 0x9e3779b97f4a7c15ull;
+    bool backdrop = false;
+    std::vector<ElementPtr>* pins = nullptr;
+
+    void add(uint64_t v)
+    {
+        h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+        h *= 0xff51afd7ed558ccdull;
+        h ^= h >> 33;
+    }
+    void add(double v)
+    {
+        uint64_t u;
+        std::memcpy(&u, &v, sizeof u);
+        add(u);
+    }
+    void add(int v) { add(uint64_t(int64_t(v))); }
+    void add(bool v) { add(uint64_t(v)); }
+    void add(const void* p) { add(uint64_t(reinterpret_cast<uintptr_t>(p))); }
+    void add(const std::string& s)
+    {
+        add(uint64_t(s.size()));
+        add(uint64_t(std::hash<std::string>{}(s)));
+    }
+    void add(const Affine& m)
+    {
+        add(m.a);
+        add(m.b);
+        add(m.c);
+        add(m.d);
+        add(m.tx);
+        add(m.ty);
+    }
+    void add(const Color& c) { add(uint64_t(c.r) | uint64_t(c.g) << 8 | uint64_t(c.b) << 16 | uint64_t(c.a) << 24); }
+    void add(const ColorTransform& t)
+    {
+        for (double v : {t.rm, t.gm, t.bm, t.am, t.ro, t.go, t.bo, t.ao}) add(v);
+    }
+    void add(const Rect& r)
+    {
+        for (double v : {r.x0, r.y0, r.x1, r.y1}) add(v);
+    }
+};
+
+void Renderer::hashElement(KeyState& k, const EvalItem& item, int depth) const
+{
+    const Element& e = *item.element;
+    k.add(int(e.type()));
+    k.add(e.matrix);
+    switch (e.type()) {
+    case ElementType::Shape:
+        // Shape graphs are immutable: the (pinned) pointer names the content.
+        k.add(static_cast<const ShapeElement&>(e).graph.get());
+        k.pins->push_back(item.element);
+        return;
+    case ElementType::Morph:
+        k.add(static_cast<const MorphElement&>(e).data.get());
+        k.pins->push_back(item.element);
+        return;
+    case ElementType::Group: {
+        const auto& g = static_cast<const GroupElement&>(e);
+        k.add(int(g.children.size()));
+        for (const ElementPtr& ch : g.children) hashElement(k, {ch, item.localFrame, ch.get()}, depth);
+        return;
+    }
+    case ElementType::Instance: {
+        const auto& in = static_cast<const InstanceElement&>(e);
+        k.add(in.visible);
+        if (!in.visible) return;
+        const Symbol* sym = m_doc.symbol(in.symbolId);
+        k.add(in.symbolId);
+        if (!sym || depth > 32) return;
+        const ButtonState state = item.source && item.source == m_opts.hotButton ? m_opts.hotState : ButtonState::Up;
+        const int frame = instanceSymbolFrame(m_doc, in, item.localFrame, m_opts.clipFrame, state);
+        k.add(frame);
+        k.add(int(sym->type));
+        k.add(int(in.behavior));
+        k.add(sym->scale9.has_value());
+        if (sym->scale9) k.add(*sym->scale9);
+        k.add(in.color.toTransform());
+        k.add(int(in.blend));
+        if (in.blend != BlendMode::Normal && in.blend != BlendMode::Layer && in.behavior != SymbolType::Graphic)
+            k.backdrop = true;
+        k.add(int(in.filters.size()));
+        for (const Filter& f : in.filters) {
+            k.add(int(f.type));
+            k.add(f.enabled);
+            for (double v : {f.blurX, f.blurY, f.strength, f.angle, f.distance, f.brightness, f.contrast, f.saturation, f.hue})
+                k.add(v);
+            k.add(f.quality);
+            k.add(f.color);
+            k.add(f.highlight);
+            k.add(f.inner);
+            k.add(f.knockout);
+            k.add(f.hideObject);
+            k.add(int(f.bevel));
+            k.add(int(f.gradient.stops.size()));
+            for (const GradientStop& st : f.gradient.stops) {
+                k.add(st.pos);
+                k.add(st.color);
+            }
+        }
+        hashTimeline(k, sym->timeline, frame, depth + 1);
+        return;
+    }
+    }
+}
+
+void Renderer::hashLayer(KeyState& k, const Timeline& tl, int index, int frame, int depth) const
+{
+    const Layer& l = tl.layers[index];
+    k.add(uint64_t(l.id));
+    k.add(int(l.type));
+    k.add(l.visible);
+    k.add(l.locked);
+    k.add(l.outline);
+    k.add(l.color);
+    k.add(uint64_t(l.parentId));
+    k.add(int(l.blend));
+    k.add(l.opacity);
+    if (l.blend != BlendMode::Normal) k.backdrop = true;
+    if (l.type == LayerType::Folder) return;
+    const std::vector<EvalItem> items = evaluateLayer(m_doc, tl, index, frame);
+    k.add(int(items.size()));
+    for (const EvalItem& it : items) hashElement(k, it, depth);
+}
+
+void Renderer::hashTimeline(KeyState& k, const Timeline& tl, int frame, int depth) const
+{
+    k.add(int(tl.layers.size()));
+    for (int i = 0; i < int(tl.layers.size()); ++i) hashLayer(k, tl, i, frame, depth);
+}
+
+LayerKey Renderer::layerKey(const Timeline& tl, int layerIndex, int frame) const
+{
+    LayerKey out;
+    KeyState k;
+    k.pins = &out.pins;
+    hashLayer(k, tl, layerIndex, frame, 0);
+    if (unitOf(tl, layerIndex, 0) == Unit::Mask) {
+        const uint32_t id = tl.layers[layerIndex].id;
+        for (int j = int(tl.layers.size()) - 1; j >= 0; --j)
+            if (tl.layers[j].parentId == id && !layerHidden(tl, j)) hashLayer(k, tl, j, frame, 0);
+    }
+    out.key = k.h;
+    out.backdrop = k.backdrop;
+    return out;
+}
+
+// --- Rendering ----------------------------------------------------------------------
+
 void Renderer::renderTimeline(Surface& target, const Timeline& tl, int frame, const Ctx& c)
 {
     if (c.depth > 32) return;
     const int n = int(tl.layers.size());
+    const bool filtered = c.depth == 0 && !m_opts.onlyLayers.empty();
     for (int i = n - 1; i >= 0; --i) {
+        const Unit unit = unitOf(tl, i, c.depth);
+        if (unit == Unit::None) continue;
+        if (filtered && (i >= int(m_opts.onlyLayers.size()) || !m_opts.onlyLayers[i])) continue;
         const Layer& l = tl.layers[i];
-        if (l.type == LayerType::Folder) continue;
-        if (layerHidden(tl, i)) continue;
-        if (l.type == LayerType::Guide && (!m_opts.showGuides || c.depth > 0)) continue;
-
-        // Masked layers are drawn together with their (active) mask.
-        if (const Layer* mask = tl.maskOf(i)) {
-            const bool active = !m_opts.masksNeedLock || mask->locked;
-            if (active && mask->visible) continue;
-        }
-        if (l.type == LayerType::Mask) {
-            const bool active = !m_opts.masksNeedLock || l.locked;
-            if (active) {
-                std::unique_ptr<Surface> content = target.makeLayer(target.size());
-                Ctx cc = c;
-                for (int j = n - 1; j >= 0; --j) {
-                    if (tl.layers[j].parentId != l.id || layerHidden(tl, j)) continue;
-                    renderLayerItems(*content, tl, j, frame, cc);
-                }
-                std::unique_ptr<Surface> mask = target.makeLayer(target.size());
-                Ctx mc = c;
-                mc.ct = ColorTransform{}; // mask shape: only coverage matters
-                renderLayerItems(*mask, tl, i, frame, mc);
-                content->applyMask(*mask);
-                target.composite(*content, QPoint(0, 0), BlendMode::Normal, 1.0);
-                continue;
+        if (unit == Unit::Mask) {
+            std::unique_ptr<Surface> content = target.makeLayer(target.size());
+            for (int j = n - 1; j >= 0; --j) {
+                if (tl.layers[j].parentId != l.id || layerHidden(tl, j)) continue;
+                renderLayerItems(*content, tl, j, frame, c);
             }
+            std::unique_ptr<Surface> mask = target.makeLayer(target.size());
+            Ctx mc = c;
+            mc.ct = ColorTransform{}; // mask shape: only coverage matters
+            renderLayerItems(*mask, tl, i, frame, mc);
+            content->applyMask(*mask);
+            target.composite(*content, QPoint(0, 0), BlendMode::Normal, 1.0);
+            continue;
         }
         renderLayerItems(target, tl, i, frame, c);
     }

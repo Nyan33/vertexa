@@ -282,35 +282,40 @@ ShapeRenderData buildRenderData(const ShapeGraph& g)
     return rd;
 }
 
-const ShapeRenderData& ShapeGraph::renderData() const
-{
-    if (!m_cache.render) m_cache.render = std::make_shared<ShapeRenderData>(buildRenderData(*this));
-    return *m_cache.render;
-}
+const ShapeRenderData& ShapeGraph::renderData() const { return *renderDataPtr(); }
 
 std::shared_ptr<const ShapeRenderData> ShapeGraph::renderDataPtr() const
 {
-    (void)renderData();
+    {
+        std::lock_guard lock(m_cache.mutex);
+        if (m_cache.render) return m_cache.render;
+    }
+    auto rd = std::make_shared<ShapeRenderData>(buildRenderData(*this));
+    std::lock_guard lock(m_cache.mutex);
+    if (!m_cache.render) m_cache.render = std::move(rd);
     return m_cache.render;
 }
 
 const Arrangement& ShapeGraph::topology() const
 {
-    if (!m_cache.topology) {
-        auto arr = std::make_shared<Arrangement>();
-        arr->setLayers({LayerKind::Label});
-        for (int i = 0; i < int(edges.size()); ++i) {
-            ArrInput in;
-            in.curve = edges[i].c;
-            in.layer = 0;
-            in.labelLeft = edges[i].fillL;
-            in.labelRight = edges[i].fillR;
-            in.tag = i;
-            arr->add(in);
-        }
-        arr->build();
-        m_cache.topology = arr;
+    {
+        std::lock_guard lock(m_cache.mutex);
+        if (m_cache.topology) return *m_cache.topology;
     }
+    auto arr = std::make_shared<Arrangement>();
+    arr->setLayers({LayerKind::Label});
+    for (int i = 0; i < int(edges.size()); ++i) {
+        ArrInput in;
+        in.curve = edges[i].c;
+        in.layer = 0;
+        in.labelLeft = edges[i].fillL;
+        in.labelRight = edges[i].fillR;
+        in.tag = i;
+        arr->add(in);
+    }
+    arr->build();
+    std::lock_guard lock(m_cache.mutex);
+    if (!m_cache.topology) m_cache.topology = std::move(arr);
     return *m_cache.topology;
 }
 

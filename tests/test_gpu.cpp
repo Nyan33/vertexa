@@ -11,6 +11,7 @@
 #include "core/ShapeOps.h"
 #include "core/io/FlaImport.h"
 #include "render/GlRenderer.h"
+#include "render/LayerCache.h"
 
 #include <QDir>
 #include <QGuiApplication>
@@ -204,6 +205,38 @@ VX_TEST(gpu_blend_modes_and_colour_effects)
         d.scenes[0].layers[0].keys[0].elements = {holder};
         CHECK(sameOnGpu(d, d.scenes[0], 0, {400, 300}, Affine{}, mode == BlendMode::Alpha ? "blend alpha" : "blend erase"));
     }
+}
+
+VX_TEST(gpu_layer_cache_draws_over_cached_layers)
+{
+    if (!haveGpu()) return;
+    // The top layer multiplies with the (cached) layers below it: it is drawn
+    // on the GPU over their pixels.
+    const Document d = compositingScene(BlendMode::Multiply);
+    const QSize size(400, 300);
+    QImage cpu(size, QImage::Format_ARGB32_Premultiplied);
+    cpu.fill(0);
+    Renderer(d).render(cpu, d.scenes[0], 0, Affine{});
+    LayerCache cache;
+    for (int i = 0; i < 7; ++i) {
+        QImage img(size, QImage::Format_ARGB32_Premultiplied);
+        img.fill(0);
+        cache.render(img, d, d.scenes[0], 0, Affine{}, {}, "0", true);
+        const Diff diff = compare(cpu, img);
+        CHECK(diff.mean < 1.5 && diff.bad < 0.004);
+    }
+    CHECK(cache.stats().drawn == 1);
+    // Drawing one layer over pixels already in the target.
+    RenderOptions below, top;
+    below.onlyLayers = {0, 1};
+    top.onlyLayers = {1, 0};
+    QImage img(size, QImage::Format_ARGB32_Premultiplied);
+    img.fill(0);
+    Renderer(d, below).render(img, d.scenes[0], 0, Affine{});
+    CHECK(GlRenderer::instance()->render(img, d, d.scenes[0], 0, Affine{}, {}, top, false));
+    const Diff diff = compare(cpu, img);
+    std::printf("  %-28s mean %.3f  edge-ish %.3f%%\n", "drawn over pixels", diff.mean, diff.bad * 100);
+    CHECK(diff.mean < 1.5 && diff.bad < 0.004);
 }
 
 VX_TEST(gpu_masks_filters_and_nine_slice)

@@ -84,28 +84,7 @@ QStringList easeNames()
 /// Invert, Alpha, Erase), followed by the extra Krita-style modes.
 QComboBox* blendCombo(QWidget* parent, BlendMode current, std::function<void(BlendMode)> fn)
 {
-    auto* c = new QComboBox(parent);
-    auto add = [c](BlendMode m) {
-        const auto label = blendModeLabel(m);
-        c->addItem(QString::fromUtf8(label.data(), int(label.size())), int(m));
-    };
-    const std::vector<std::vector<BlendMode>> groups = {
-        {BlendMode::Normal},
-        {BlendMode::Layer},
-        {BlendMode::Darken, BlendMode::Multiply},
-        {BlendMode::Lighten, BlendMode::Screen},
-        {BlendMode::Overlay, BlendMode::HardLight},
-        {BlendMode::Add, BlendMode::Subtract, BlendMode::Difference},
-        {BlendMode::Invert, BlendMode::Alpha, BlendMode::Erase},
-    };
-    for (size_t g = 0; g < groups.size(); ++g) {
-        if (g > 0) c->insertSeparator(c->count());
-        for (BlendMode m : groups[g]) add(m);
-    }
-    c->insertSeparator(c->count());
-    for (const auto& b : kBlendModes)
-        if (!b.animate) add(b.mode);
-    c->setCurrentIndex(std::max(0, c->findData(int(current))));
+    QComboBox* c = blendModeCombo(parent, current);
     QObject::connect(c, qOverload<int>(&QComboBox::activated), parent, [c, fn](int i) {
         const QVariant v = c->itemData(i);
         if (v.isValid()) fn(BlendMode(v.toInt()));
@@ -120,8 +99,11 @@ PropertiesPanel::PropertiesPanel(Editor* editor, QWidget* parent) : QScrollArea(
     setWidgetResizable(true);
     setFrameShape(QFrame::NoFrame);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    for (auto sig : {&Editor::selectionChanged, &Editor::contextChanged, &Editor::documentChanged, &Editor::frameSelectionChanged})
+    for (auto sig : {&Editor::selectionChanged, &Editor::contextChanged, &Editor::frameSelectionChanged})
         connect(m_ed, sig, this, &PropertiesPanel::scheduleRebuild);
+    connect(m_ed, &Editor::documentChanged, this, [this]() {
+        if (!(shown() == m_shown)) scheduleRebuild();
+    });
     connect(m_ed, &Editor::layerChanged, this, &PropertiesPanel::scheduleRebuild);
     connect(m_ed, &Editor::toolChanged, this, &PropertiesPanel::scheduleRebuild);
     // Another brush picked in the Brushes panel, or resized with [ and ].
@@ -131,7 +113,19 @@ PropertiesPanel::PropertiesPanel(Editor* editor, QWidget* parent) : QScrollArea(
             scheduleRebuild();
     });
     connect(m_ed, &Editor::frameChanged, this, [this]() {
-        if (!m_ed->isPlaying()) scheduleRebuild();
+        if (m_ed->isPlaying() || m_pending || m_pendingFrame) return;
+        const std::vector<const void*> deps = frameDependencies();
+        if (deps == m_frameDeps) return;
+        // Only the keyframe changed and the Frame section can be rebuilt alone.
+        if (m_frameHost && !m_ed->hasSelection() && deps.size() == 1 && m_frameDeps.size() == 1) {
+            m_pendingFrame = true;
+            QTimer::singleShot(0, this, [this]() {
+                m_pendingFrame = false;
+                if (!m_pending) rebuildFrame();
+            });
+            return;
+        }
+        scheduleRebuild();
     });
     connect(Theme::instance(), &ui::Theme::changed, this, &PropertiesPanel::scheduleRebuild);
     rebuild();
@@ -167,7 +161,7 @@ void PropertiesPanel::row(QGridLayout* g, const QString& label, QWidget* w)
     const int r = g->rowCount();
     if (!label.isEmpty()) {
         auto* l = new QLabel(label, m_content);
-        l->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text2.name()));
+        l->setProperty("role", "caption");
         g->addWidget(l, r, 0, Qt::AlignLeft | Qt::AlignVCenter);
         g->addWidget(w, r, 1);
     } else {
@@ -175,8 +169,70 @@ void PropertiesPanel::row(QGridLayout* g, const QString& label, QWidget* w)
     }
 }
 
+std::vector<const void*> PropertiesPanel::frameDependencies() const
+{
+    std::vector<const void*> deps;
+    const Layer* l = m_ed->currentLayer();
+    deps.push_back(l ? l->keyAt(m_ed->frame()) : nullptr);
+    for (const ElementRef& r : m_ed->selection()) deps.push_back(m_ed->shownElement(r).get());
+    return deps;
+}
+
+PropertiesPanel::Shown PropertiesPanel::shown() const
+{
+    Shown s;
+    const Document& d = m_ed->doc();
+    s.document = {d.width, d.height, d.fps, uint32_t(d.background.r) << 24 | d.background.g << 16 | d.background.b << 8 | d.background.a};
+    for (const Symbol& sym : d.symbols) {
+        std::vector<double> grid;
+        if (sym.scale9) grid = {sym.scale9->x0, sym.scale9->y0, sym.scale9->x1, sym.scale9->y1};
+        s.symbols.emplace_back(sym.id, sym.name, int(sym.type), std::move(grid));
+    }
+    for (const ContextEntry& c : m_ed->contextStack()) s.context.push_back(c.symbolId);
+    s.layerIndex = m_ed->layerIndex();
+    if (const Layer* l = m_ed->currentLayer()) {
+        s.layer = {l->id, l->name, int(l->type), int(l->blend), l->opacity};
+        if (const Keyframe* k = l->keyAt(m_ed->frame()))
+            s.key = {k->start, k->duration, k->label, int(k->labelType), int(k->tween), k->classic, k->shape, k->hints};
+    }
+    for (const ElementRef& r : m_ed->selection()) s.selection.push_back(m_ed->shownElement(r).get());
+    const ShapePick& pick = m_ed->shapePick();
+    s.selection.push_back(pick.valid() ? pick.graph.get() : nullptr);
+    return s;
+}
+
+void PropertiesPanel::rebuildFrame()
+{
+    if (!m_frameHost) {
+        rebuild();
+        return;
+    }
+    m_frameDeps = frameDependencies();
+    m_shown = shown();
+    QLayout* fl = m_frameHost->layout();
+    while (QLayoutItem* item = fl->takeAt(0)) {
+        if (QWidget* w = item->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
+        delete item;
+    }
+    buildFrameSection();
+}
+
+void PropertiesPanel::buildFrameSection()
+{
+    QVBoxLayout* outer = m_layout;
+    m_layout = static_cast<QVBoxLayout*>(m_frameHost->layout());
+    buildFrame();
+    m_layout = outer;
+}
+
 void PropertiesPanel::rebuild()
 {
+    m_frameDeps = frameDependencies();
+    m_shown = shown();
+    m_frameHost = nullptr;
     QWidget* old = takeWidget();
     if (old) old->deleteLater();
     m_content = new QWidget();
@@ -188,7 +244,12 @@ void PropertiesPanel::rebuild()
     if (m_ed->hasSelection()) buildSelection();
     else {
         if (m_ed->inSymbol()) buildSymbol();
-        buildFrame();
+        m_frameHost = new QWidget(m_content);
+        auto* fl = new QVBoxLayout(m_frameHost);
+        fl->setContentsMargins(0, 0, 0, 0);
+        fl->setSpacing(0);
+        m_layout->addWidget(m_frameHost);
+        buildFrameSection();
         buildLayer();
         buildDocument();
     }
@@ -391,7 +452,7 @@ void PropertiesPanel::buildToolOptions()
         auto* hint = new QLabel(tr("Paints vector fills with the stroke colour. Pick brushes, tune them and make "
                                    "art brushes from a selection in the Brushes panel."), m_content);
         hint->setWordWrap(true);
-        hint->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text3.name()));
+        hint->setProperty("role", "hint");
         row(g, {}, hint);
         break;
     }
@@ -415,7 +476,7 @@ void PropertiesPanel::buildToolOptions()
     default: {
         auto* hint = new QLabel(m_content);
         hint->setWordWrap(true);
-        hint->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text3.name()));
+        hint->setProperty("role", "hint");
         if (tool == ToolId::Selection)
             hint->setText(tr("Click fills and lines to select them. Drag an edge to bend it, drag a corner to move it. "
                              "Double-click a symbol to edit it in place."));
@@ -883,7 +944,7 @@ void PropertiesPanel::buildSymbol()
         }));
     auto* hint = new QLabel(m_content);
     hint->setWordWrap(true);
-    hint->setStyleSheet(QString("color: %1; font-size: 11px;").arg(Theme::p().text3.name()));
+    hint->setProperty("role", "hint");
     if (s->type == SymbolType::Button)
         hint->setText(tr("Frames 1–4 are the Up, Over, Down and Hit states. Control ▸ Enable Simple Buttons "
                          "(Ctrl+Alt+B) previews them on the stage."));

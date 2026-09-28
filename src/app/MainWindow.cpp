@@ -186,6 +186,7 @@ void MainWindow::createActions()
     add("newFolder", tr("New Layer &Folder"), {}, [ed] { ed->addFolder(); });
     add("addMotionGuide", tr("Add Classic Motion &Guide"), {}, [ed] { ed->addLayer(LayerType::Guide); });
     add("deleteLayer", tr("Delete Layer"), {}, [ed] { ed->deleteLayer(); });
+    add("layerProperties", tr("Layer &Properties…"), {}, [this, ed] { LayerDialog::edit(ed, ed->layerIndex(), this); });
     add("insertFrame", tr("Insert &Frame"), QKeySequence(Qt::Key_F5), [ed] { ed->insertFrames(); });
     add("removeFrames", tr("&Remove Frames"), QKeySequence("Shift+F5"), [ed] { ed->removeFrames(); });
     add("insertKeyframe", tr("Insert &Keyframe"), QKeySequence(Qt::Key_F6), [ed] { ed->insertKeyframe(false); });
@@ -374,6 +375,8 @@ void MainWindow::createMenus()
     QMenu* combine = modify->addMenu(tr("&Combine Objects"));
     for (const char* n : {"union", "intersect", "punch", "crop"}) combine->addAction(a(n));
     QMenu* tlm = modify->addMenu(tr("&Timeline"));
+    tlm->addAction(a("layerProperties"));
+    tlm->addSeparator();
     for (const char* n : {"reverseFrames", "removeTween", "convertToKeyframes", "convertToBlankKeyframes", "clearKeyframe", "removeFrames"})
         tlm->addAction(a(n));
     QMenu* transform = modify->addMenu(tr("T&ransform"));

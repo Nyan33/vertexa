@@ -162,11 +162,19 @@ void clipAndPush(std::vector<Seg>& out, double x0, double y0, double x1, double 
 
 } // namespace
 
-void flattenContour(const Contour& c, const Affine& m, double tol, std::vector<Vec2>& out)
+void flattenContour(const Contour& c, const Affine& m, double tol, std::vector<Vec2>& out, const Rect* cull)
 {
     for (size_t i = 0; i < c.size(); ++i) {
         const Cubic d = c[i].transformed(m);
         if (i == 0) out.push_back(d.p0);
+        if (cull) {
+            const double x0 = std::min({d.p0.x, d.p1.x, d.p2.x, d.p3.x}), x1 = std::max({d.p0.x, d.p1.x, d.p2.x, d.p3.x});
+            const double y0 = std::min({d.p0.y, d.p1.y, d.p2.y, d.p3.y}), y1 = std::max({d.p0.y, d.p1.y, d.p2.y, d.p3.y});
+            if (x1 < cull->x0 || x0 > cull->x1 || y1 < cull->y0 || y0 > cull->y1) {
+                out.push_back(d.p3);
+                continue;
+            }
+        }
         if (d.isStraight(tol * 0.05)) {
             out.push_back(d.p3);
             continue;
@@ -189,11 +197,13 @@ void rasterizeFills(QImage& target, const std::vector<RasterFill>& fills, const 
     std::vector<int> polyStyle;
     Rect bb;
     std::vector<Vec2> pts;
+    // Curves away from the clip only contribute their end points.
+    const Rect cull{double(clip.left()) - 1, double(clip.top()) - 1, double(clip.right()) + 2, double(clip.bottom()) + 2};
     for (int s = 0; s < int(fills.size()); ++s) {
         if (!fills[s].contours) continue;
         for (const Contour& c : *fills[s].contours) {
             pts.clear();
-            flattenContour(c, toDevice, 0.12, pts);
+            flattenContour(c, toDevice, 0.12, pts, &cull);
             if (pts.size() < 3) continue;
             for (const Vec2& p : pts) bb.include(p);
             polys.push_back(pts);
@@ -207,13 +217,17 @@ void rasterizeFills(QImage& target, const std::vector<RasterFill>& fills, const 
     const int ry1 = std::min(clip.bottom() + 1, int(std::ceil(bb.y1)) + 1);
     if (rx1 <= rx0 || ry1 <= ry0) return;
     const int W = rx1 - rx0;
+    const double rowsEnd = ry1 - ry0;
 
     std::vector<Seg> segs;
     for (size_t p = 0; p < polys.size(); ++p) {
         const auto& poly = polys[p];
         for (size_t i = 0; i < poly.size(); ++i) {
             const Vec2 a = poly[i], b = poly[(i + 1) % poly.size()];
-            clipAndPush(segs, a.x - rx0, a.y - ry0, b.x - rx0, b.y - ry0, polyStyle[p], double(W));
+            const double ay = a.y - ry0, by = b.y - ry0;
+            // Rows only accumulate the pieces crossing them.
+            if (std::max(ay, by) <= 0.0 || std::min(ay, by) >= rowsEnd) continue;
+            clipAndPush(segs, a.x - rx0, ay, b.x - rx0, by, polyStyle[p], double(W));
         }
     }
     if (segs.empty()) return;

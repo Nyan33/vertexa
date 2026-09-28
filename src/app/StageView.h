@@ -6,8 +6,11 @@
 #include "Editor.h"
 #include "tools/Tool.h"
 
+#include "render/LayerCache.h"
+
 #include <QElapsedTimer>
 #include <QImage>
+#include <QPair>
 #include <QWidget>
 
 #include <map>
@@ -43,6 +46,8 @@ public:
     /// True while a tool still computes finished work in the background
     /// (e.g. paint brush strokes being merged).
     bool hasPendingWork() const;
+    /// How the last frame was drawn (layers redrawn vs. taken from the cache).
+    const LayerCache::Stats& renderStats() const { return m_layers.stats(); }
     Tool* toolFor(ToolId id) const;
     void invalidate();
     void refreshCursor();
@@ -74,6 +79,7 @@ protected:
 
 private:
     void renderCache();
+    void composeView();
     void drawSelection(QPainter& p);
     void activateTool(ToolId id);
     ToolEvent makeEvent(QPointF widgetPos, Qt::KeyboardModifiers mods) const;
@@ -86,7 +92,13 @@ private:
     double m_zoom = 1.0;
     QPointF m_pan{0, 0};  ///< widget position of the stage origin
     bool m_placed = false;
-    QImage m_cache;
+    QImage m_cache;          ///< the rendered frame (transparent outside the artwork)
+    QImage m_view;           ///< backdrop, stage and m_cache composed, as painted
+    QImage m_backdrop;       ///< margin, drop shadow and stage colour
+    QRectF m_backdropStage;
+    QPair<QRgb, QRgb> m_backdropColors;
+    bool m_backdropDark = false;
+    LayerCache m_layers;
     bool m_cacheValid = false;
     bool m_spaceDown = false;
     bool m_panning = false;

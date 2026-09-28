@@ -6,6 +6,7 @@
 #include "render/QtConvert.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QEnterEvent>
 #include <QFrame>
 #include <QHelpEvent>
@@ -474,6 +475,33 @@ void ColorPicker::mouseReleaseEvent(QMouseEvent*)
 {
     if (m_drag != Part::None) emit colorCommitted(color());
     m_drag = Part::None;
+}
+
+QComboBox* blendModeCombo(QWidget* parent, BlendMode current)
+{
+    auto* c = new QComboBox(parent);
+    auto add = [c](BlendMode m) {
+        const auto label = blendModeLabel(m);
+        c->addItem(QString::fromUtf8(label.data(), int(label.size())), int(m));
+    };
+    const std::vector<std::vector<BlendMode>> groups = {
+        {BlendMode::Normal},
+        {BlendMode::Layer},
+        {BlendMode::Darken, BlendMode::Multiply},
+        {BlendMode::Lighten, BlendMode::Screen},
+        {BlendMode::Overlay, BlendMode::HardLight},
+        {BlendMode::Add, BlendMode::Subtract, BlendMode::Difference},
+        {BlendMode::Invert, BlendMode::Alpha, BlendMode::Erase},
+    };
+    for (size_t g = 0; g < groups.size(); ++g) {
+        if (g > 0) c->insertSeparator(c->count());
+        for (BlendMode m : groups[g]) add(m);
+    }
+    c->insertSeparator(c->count());
+    for (const auto& b : kBlendModes)
+        if (!b.animate) add(b.mode);
+    c->setCurrentIndex(std::max(0, c->findData(int(current))));
+    return c;
 }
 
 void popupColorPicker(QWidget* anchor, const QColor& initial, const std::function<void(const QColor&, bool)>& onChange)

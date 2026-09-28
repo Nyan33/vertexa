@@ -5,6 +5,7 @@
 #include "core/VectorBrush.h"
 #include "render/Blend.h"
 #include "render/Filters.h"
+#include "render/LayerCache.h"
 #include "render/Raster.h"
 #include "render/Renderer.h"
 #include "render/SvgExport.h"
@@ -19,6 +20,133 @@ QImage blank(int w, int h, QRgb c = 0)
 {
     QImage img(w, h, QImage::Format_ARGB32_Premultiplied);
     img.fill(c);
+    return img;
+}
+
+int maxDiff(const QImage& a, const QImage& b)
+{
+    if (a.size() != b.size()) return 256;
+    int worst = 0;
+    for (int y = 0; y < a.height(); ++y) {
+        const auto* pa = reinterpret_cast<const quint32*>(a.constScanLine(y));
+        const auto* pb = reinterpret_cast<const quint32*>(b.constScanLine(y));
+        for (int x = 0; x < a.width(); ++x)
+            for (int sh = 0; sh < 32; sh += 8) worst = std::max(worst, std::abs(int((pa[x] >> sh) & 0xff) - int((pb[x] >> sh) & 0xff)));
+    }
+    return worst;
+}
+
+std::shared_ptr<ShapeElement> box(Rect r, Color c, bool object = true)
+{
+    return makeShapeElement(graphFromRegion(Region::rect(r), FillStyle::solid(c)), object);
+}
+
+/// A scene with a bit of everything the renderer does: static layers, a
+/// classic tween of a filtered movie clip, a looping graphic, a locked mask,
+/// layer opacity and blending, an instance blend mode and a hidden layer.
+Document richScene()
+{
+    Document d = Document::createDefault();
+    d.width = 400;
+    d.height = 300;
+    Timeline& tl = d.scenes[0];
+    tl.layers.clear();
+    auto layer = [&](const std::string& name) -> Layer& {
+        tl.layers.push_back(d.makeLayer(name));
+        tl.layers.back().keys[0].duration = 24;
+        return tl.layers.back();
+    };
+    // Bottom to top in the layer list order below: index 0 is the top layer.
+    std::vector<Layer> stack;
+    {
+        Layer& l = layer("static");
+        for (int i = 0; i < 30; ++i)
+            l.keys[0].elements.push_back(box({10.0 + i * 12, 20.0 + (i % 5) * 50, 30.0 + i * 12, 60.0 + (i % 5) * 50},
+                                             Color(40 * (i % 6), 200 - 5 * i, 90)));
+    }
+    {
+        Layer& l = layer("tween");
+        auto clip = convertToSymbol(d, {box({0, 0, 40, 30}, Color(250, 180, 0))}, "Clip", SymbolType::MovieClip, {0, 0});
+        clip->filters = {Filter::defaults(FilterType::DropShadow)};
+        Keyframe k0 = l.keys[0];
+        k0.duration = 12;
+        k0.tween = TweenType::Classic;
+        k0.elements = {clip};
+        auto moved = std::static_pointer_cast<InstanceElement>(clip->clone());
+        moved->matrix = Affine::translate(300, 200) * Affine::rotate(0.8);
+        Keyframe k1;
+        k1.start = 12;
+        k1.duration = 12;
+        k1.elements = {moved};
+        l.keys = {k0, k1};
+    }
+    {
+        // A graphic symbol that plays its own frames.
+        Symbol s;
+        s.id = d.newSymbolId();
+        s.name = "Blink";
+        s.type = SymbolType::Graphic;
+        Layer sl = d.makeLayer("Layer 1");
+        sl.keys.clear();
+        for (int f = 0; f < 4; ++f) {
+            Keyframe k;
+            k.start = f;
+            k.duration = 1;
+            k.elements = {box({0, 0, 20.0 + f * 10, 20}, Color(0, 60 * f, 255))};
+            sl.keys.push_back(k);
+        }
+        s.timeline.layers.push_back(sl);
+        d.symbols.push_back(s);
+        auto g = std::make_shared<InstanceElement>();
+        g->symbolId = s.id;
+        g->behavior = SymbolType::Graphic;
+        g->matrix = Affine::translate(200, 30);
+        layer("graphic").keys[0].elements = {g};
+    }
+    {
+        Layer& mask = layer("mask");
+        mask.type = LayerType::Mask;
+        mask.locked = true;
+        mask.keys[0].elements = {box({50, 100, 250, 180}, Color(0, 0, 0))};
+        Layer& masked = layer("masked");
+        masked.parentId = tl.layers[tl.layers.size() - 2].id;
+        masked.keys[0].elements = {box({0, 120, 400, 160}, Color(200, 0, 200))};
+    }
+    {
+        Layer& l = layer("half multiply");
+        l.opacity = 0.5;
+        l.blend = BlendMode::Multiply;
+        l.keys[0].elements = {box({100, 50, 300, 250}, Color(0, 200, 250))};
+    }
+    {
+        Layer& l = layer("screen instance");
+        auto sc = convertToSymbol(d, {box({0, 0, 80, 80}, Color(90, 90, 200))}, "Glow", SymbolType::MovieClip, {0, 0});
+        sc->blend = BlendMode::Screen;
+        sc->matrix = Affine::translate(20, 180);
+        l.keys[0].elements = {sc};
+    }
+    {
+        Layer& l = layer("hidden");
+        l.visible = false;
+        l.keys[0].elements = {box({0, 0, 400, 300}, Color(255, 0, 0))};
+    }
+    {
+        Layer& l = layer("faded top");
+        l.opacity = 0.6;
+        l.keys[0].elements = {box({150, 10, 380, 60}, Color(20, 20, 20))};
+    }
+    std::reverse(tl.layers.begin(), tl.layers.end()); // "faded top" first
+    // Masked layers follow their mask in the list.
+    for (size_t i = 0; i + 1 < tl.layers.size(); ++i)
+        if (tl.layers[i].name == "masked" && tl.layers[i + 1].name == "mask") std::swap(tl.layers[i], tl.layers[i + 1]);
+    return d;
+}
+
+QImage renderDirect(const Document& d, int frame, QSize size, const Affine& view)
+{
+    QImage img = blank(size.width(), size.height());
+    CpuSurface surface(img);
+    Renderer(d).render(surface, d.scenes[0], frame, view);
     return img;
 }
 
@@ -267,6 +395,98 @@ VX_TEST(button_states_and_nine_slice_render)
     CHECK(qRed(sliced.pixel(2, 10)) < 20);   // border still 4 px wide
     CHECK(qRed(sliced.pixel(97, 10)) < 20);  // right border ends at 100
     CHECK(qRed(sliced.pixel(94, 10)) > 235);
+}
+
+VX_TEST(layer_opacity_and_blending)
+{
+    Document d = Document::createDefault();
+    d.width = 60;
+    d.height = 40;
+    d.scenes[0].layers[0].keys[0].elements = {box({10, 10, 50, 30}, Color(255, 0, 0))};
+    d.scenes[0].layers[0].opacity = 0.5;
+    QImage img = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, false);
+    CHECK(qRed(img.pixel(30, 20)) == 255 && std::abs(qGreen(img.pixel(30, 20)) - 128) <= 1);
+    CHECK(img.pixel(5, 5) == qRgb(255, 255, 255));
+    // Overlapping objects inside a half transparent layer do not show through
+    // each other: the layer is composited as a whole.
+    d.scenes[0].layers[0].keys[0].elements.push_back(box({30, 10, 55, 30}, Color(0, 0, 255)));
+    img = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, false);
+    CHECK(qRed(img.pixel(40, 20)) >= 126 && qRed(img.pixel(40, 20)) <= 129 && qBlue(img.pixel(40, 20)) == 255);
+    // Multiply on a layer darkens what lies below.
+    Layer top = d.makeLayer("Top");
+    top.blend = BlendMode::Multiply;
+    top.keys[0].elements = {box({0, 0, 60, 40}, Color(128, 128, 128))};
+    d.scenes[0].layers.insert(d.scenes[0].layers.begin(), top);
+    img = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, false);
+    CHECK(std::abs(qRed(img.pixel(5, 5)) - 128) <= 1);
+}
+
+VX_TEST(banded_render_matches_single_pass)
+{
+    // Large frames are rendered in bands on several threads.
+    const Document d = richScene();
+    const Affine view = Affine::scale(3.5);
+    for (int frame : {0, 5, 13}) {
+        QImage banded = blank(1400, 1050);
+        Renderer(d).render(banded, d.scenes[0], frame, view);
+        CHECK(maxDiff(banded, renderDirect(d, frame, banded.size(), view)) <= 1);
+    }
+}
+
+VX_TEST(zoomed_in_render_matches_larger_render)
+{
+    // Curves away from the visible area are replaced by their chords: the
+    // pixels that are drawn must not change.
+    ShapeGraph g = graphFromRegion(Region::circle({100, 100}, 90), FillStyle::solid(Color(20, 120, 220)));
+    g = overlay(g, graphFromRegion(Region::ellipse({150, 80}, 60, 30), FillStyle::solid(Color(230, 60, 20))));
+    const Affine view = Affine::translate(-900, -300) * Affine::scale(12);
+    QImage small = blank(320, 240, qRgb(255, 255, 255));
+    Renderer::renderShape(small, g.renderData(), view, {}, small.rect());
+    QImage large = blank(1600, 1200, qRgb(255, 255, 255));
+    Renderer::renderShape(large, g.renderData(), view, {}, large.rect());
+    CHECK(maxDiff(small, large.copy(0, 0, 320, 240)) <= 1);
+}
+
+VX_TEST(fast_source_over)
+{
+    QImage dst = blank(2, 1, qRgba(255, 255, 255, 255));
+    QImage src = blank(2, 1);
+    src.setPixel(0, 0, qRgba(64, 32, 0, 128)); // premultiplied
+    src.setPixel(1, 0, qRgba(10, 20, 30, 255));
+    compositeImage(dst, src, {0, 0}, BlendMode::Normal, 1.0);
+    CHECK(dst.pixel(0, 0) == qRgba(64 + 127, 32 + 127, 127, 255));
+    CHECK(dst.pixel(1, 0) == qRgba(10, 20, 30, 255));
+}
+
+VX_TEST(layer_cache_matches_direct_render)
+{
+    Document d = richScene();
+    const QSize size(400, 300);
+    const Affine view;
+    LayerCache cache;
+    // Playhead moves, pauses, jumps back; an edit on one layer in between.
+    const std::vector<int> frames = {0, 0, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 7, 12, 13, 13, 13, 13, 13, 20, 0, 1};
+    for (size_t i = 0; i < frames.size(); ++i) {
+        if (i == 10) d.scenes[0].layers.back().keys[0].elements.push_back(box({5, 5, 50, 50}, Color(0, 0, 0)));
+        if (i == 16) d.scenes[0].layers[0].opacity = 0.3;
+        QImage img = blank(size.width(), size.height());
+        cache.render(img, d, d.scenes[0], frames[i], view, {}, "0", true);
+        CHECK(maxDiff(img, renderDirect(d, frames[i], size, view)) <= 2);
+    }
+    // Resting on a frame: only layers that blend with what lies below are drawn.
+    for (int k = 0; k < 6; ++k) {
+        QImage img = blank(size.width(), size.height());
+        cache.render(img, d, d.scenes[0], 1, view, {}, "0", true);
+        CHECK(maxDiff(img, renderDirect(d, 1, size, view)) <= 2);
+    }
+    const int layers = cache.stats().layers;
+    CHECK(layers == 7); // the hidden layer is skipped, the mask draws with its layer
+    CHECK(cache.stats().drawn <= 2);
+    // A new view draws everything again.
+    QImage img = blank(size.width(), size.height());
+    cache.render(img, d, d.scenes[0], 1, Affine::scale(0.5), {}, "0", true);
+    CHECK(cache.stats().drawn == layers);
+    CHECK(maxDiff(img, renderDirect(d, 1, size, Affine::scale(0.5))) <= 2);
 }
 
 int main(int argc, char** argv)

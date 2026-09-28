@@ -746,6 +746,13 @@ public:
         endDraw();
     }
 
+    /// Replaces the pixels (premultiplied ARGB32 of this size).
+    void load(const QImage& image)
+    {
+        if (!valid()) return;
+        write(image);
+    }
+
     /// The pixels (premultiplied ARGB32).
     QImage read()
     {
@@ -920,16 +927,14 @@ bool GlRenderer::render(QImage& target, const Document& doc, const Timeline& tl,
         if (root.valid()) {
             QElapsedTimer submit;
             submit.start();
+            // Drawn over the target's pixels: layer blend modes see them.
+            if (!targetEmpty) root.load(target);
             Renderer(doc, opts).render(root, tl, frame, view, ct);
             d->sweepGeometry();
             d->lastSubmitMs = submit.nsecsElapsed() / 1e6;
             QImage img = root.read();
-            if (targetEmpty) {
-                img.setDevicePixelRatio(target.devicePixelRatio());
-                target = std::move(img);
-            } else {
-                compositeImage(target, img, QPoint(0, 0), BlendMode::Normal, 1.0);
-            }
+            img.setDevicePixelRatio(target.devicePixelRatio());
+            target = std::move(img);
             ok = true;
         }
     }

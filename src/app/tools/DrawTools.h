@@ -104,7 +104,7 @@ public:
     void paint(QPainter& p) override;
     void cancel() override;
     QCursor cursor() const override;
-    bool hasPendingWork() const override { return !m_jobs.empty(); }
+    bool hasPendingWork() const override { return !m_jobs.empty() || m_previewBusy; }
 
 private:
     struct PreviewPiece {
@@ -114,9 +114,12 @@ private:
     /// A finished stroke being turned into vector fills and merged on a
     /// worker thread; committed on the GUI thread in order.
     struct Job;
+    struct PreviewResult;
 
-    void rebuildPreview();
-    void extendTexturePreview(bool force);
+    /// Builds the exact preview of the newer samples on a worker thread (one
+    /// request at a time); until it arrives they show as a quick outline.
+    void requestPreview(bool force);
+    void finishPreview(uint64_t generation, PreviewResult& result);
     void rebuildTail();
     FillStyle paintStyle() const;
     Affine overlayTransform() const;
@@ -131,7 +134,9 @@ private:
     size_t m_covered = 0;               ///< samples the exact preview covers
     QPainterPath m_tail;                ///< quick outline of the newer samples
     QElapsedTimer m_clock;
-    qint64 m_lastBuild = 0, m_buildCost = 0;
+    qint64 m_lastBuild = 0;
+    bool m_previewBusy = false;
+    uint64_t m_previewGen = 0; ///< bumped when pending previews become stale
     std::optional<Region> m_insideMask;
     bool m_insideEmpty = false;
     int m_layer = -1;
