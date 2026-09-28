@@ -200,6 +200,17 @@ void rasterizeFills(QImage& target, const std::vector<RasterFill>& fills, const 
     // Curves away from the clip only contribute their end points.
     const Rect cull{double(clip.left()) - 1, double(clip.top()) - 1, double(clip.right()) + 2, double(clip.bottom()) + 2};
     for (int s = 0; s < int(fills.size()); ++s) {
+        for (const std::vector<std::vector<Vec2>>* set : fills[s].polygons)
+            for (const std::vector<Vec2>& poly : *set) {
+                if (poly.size() < 3) continue;
+                pts.clear();
+                for (const Vec2& v : poly) {
+                    pts.push_back(toDevice.map(v));
+                    bb.include(pts.back());
+                }
+                polys.push_back(pts);
+                polyStyle.push_back(s);
+            }
         if (!fills[s].contours) continue;
         for (const Contour& c : *fills[s].contours) {
             pts.clear();

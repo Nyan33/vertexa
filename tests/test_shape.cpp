@@ -281,4 +281,36 @@ VX_TEST(clean_region_graph_matches_full_build)
     }
 }
 
+VX_TEST(planar_drawings_merge_the_same)
+{
+    // Merged drawings are marked planar, so merging into them skips testing
+    // their edges against each other: the result must not change.
+    ShapeGraph g;
+    for (int i = 0; i < 12; ++i) {
+        const Vec2 c{40.0 + i * 23.0, 60.0 + (i % 4) * 17.0};
+        std::vector<Cubic> wave;
+        for (int k = 0; k < 6; ++k) wave.push_back(Cubic{c + Vec2{k * 20.0, 0}, c + Vec2{k * 20.0 + 7, -25}, c + Vec2{k * 20.0 + 13, 25}, c + Vec2{k * 20.0 + 20, 0}});
+        g = overlay(g, graphFromRegion(Region::circle(c, 18 + i % 5), i % 2 ? kRed : kBlue));
+        g = overlay(g, graphFromPaths({wave}, blackStroke(1.5)));
+    }
+    CHECK(g.isPlanar());
+    ShapeGraph plain; // the same edges, not marked
+    plain.fills = g.fills;
+    plain.strokes = g.strokes;
+    plain.edges = g.edges;
+    CHECK(!plain.isPlanar());
+    const ShapeGraph top = graphFromRegion(Region::rect({30, 40, 260, 90}), kRed);
+    const ShapeGraph a = overlay(g, top), b = overlay(plain, top);
+    CHECK(a.isPlanar());
+    CHECK(a.edges.size() == b.edges.size());
+    CHECK(std::abs(fillArea(a, kRed) - fillArea(b, kRed)) < 1e-6 * fillArea(b, kRed));
+    CHECK(std::abs(fillArea(a, kBlue) - fillArea(b, kBlue)) < 1e-6 * std::max(1.0, fillArea(b, kBlue)));
+    CHECK(countStroked(a) == countStroked(b));
+    // Editing the edges drops the mark; moving the drawing keeps it.
+    CHECK(g.transformed(Affine::rotate(0.3) * Affine::scale(2)).isPlanar());
+    ShapeGraph edited = g;
+    edited.edges.front().c.p1 += Vec2{1, 1};
+    CHECK(!edited.isPlanar());
+}
+
 VX_TEST_MAIN()

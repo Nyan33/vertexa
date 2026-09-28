@@ -63,7 +63,15 @@ struct FlatShape {
     std::vector<Part> fills, strokes;
 };
 int scaleBucket(double scale);
+/// Largest scale of a bucket (flattening for it is fine enough for the whole bucket).
+double bucketScale(int bucket);
 FlatShape flattenShape(const ShapeRenderData& rd, int bucket);
+
+/// Hairlines and non-scaling strokes keep their width on screen.
+bool isCosmetic(const StrokeStyle& s);
+/// Outline of a (non-cosmetic) stroke in shape space, flat enough at
+/// `scale`; filled with the non-zero rule it covers what the pen paints.
+QList<QPolygonF> strokeOutline(const ShapeRenderData::StrokePath& sp, double scale);
 
 /// Triangles of a cosmetic stroke or an outline, in device space.
 void strokeInDeviceSpace(const ShapeRenderData::StrokePath& sp, const Affine& m, std::vector<float>& tri, Rect& bounds);

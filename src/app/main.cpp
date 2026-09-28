@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Vertexa — open-source 2D vector animation studio.
+#include "CrashHandler.h"
 #include "DemoDocument.h"
 #include "Editor.h"
 #include "MainWindow.h"
@@ -14,6 +15,7 @@
 #include <QIcon>
 #include <QScreen>
 #include <QSettings>
+#include <QThreadPool>
 #include <QTimer>
 
 #include <cstring>
@@ -43,6 +45,8 @@ int main(int argc, char** argv)
     app.setApplicationVersion(VERTEXA_VERSION);
     app.setApplicationDisplayName("Vertexa");
     app.setWindowIcon(QIcon(":/icons/vertexa-256.png"));
+    // Logs, crash reports and recovery of unsaved work.
+    vx::app::crash::install();
     // GPU rendering (View > GPU Rendering); VERTEXA_GPU=0 turns it off.
     if (qEnvironmentVariable("VERTEXA_GPU") != QLatin1String("0"))
         vx::GlRenderer::setEnabled(QSettings().value("render/gpu", true).toBool());
@@ -128,5 +132,13 @@ int main(int argc, char** argv)
     } else if (parser.isSet(demo) || !files.isEmpty()) {
         QTimer::singleShot(0, &window, [&window]() { window.stage()->fitStage(); });
     }
-    return app.exec();
+    // Runs that crashed (or were killed) last time: report and recovery.
+    if (!parser.isSet(screenshot)) QTimer::singleShot(300, &window, [&window]() { window.checkLastSession(); });
+    // Checks the crash reports end to end: VERTEXA_CRASH_TEST=segv|abort|exception.
+    if (const QString how = qEnvironmentVariable("VERTEXA_CRASH_TEST"); !how.isEmpty())
+        QTimer::singleShot(1000, &window, [how]() { vx::app::crash::crashForTesting(how); });
+    const int code = app.exec();
+    QThreadPool::globalInstance()->waitForDone(3000); // an autosave in flight
+    vx::app::crash::shutdown();
+    return code;
 }

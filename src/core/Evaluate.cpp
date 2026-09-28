@@ -15,8 +15,9 @@ bool tweenable(const ElementPtr& a, const ElementPtr& b)
 {
     if (!a || !b || a->type() != b->type()) return false;
     switch (a->type()) {
-    case ElementType::Instance:
-        return static_cast<const InstanceElement&>(*a).symbolId == static_cast<const InstanceElement&>(*b).symbolId;
+    // As in Animate, an instance tweens towards the next keyframe's instance
+    // even when that one shows another symbol (swapped at the keyframe).
+    case ElementType::Instance: return true;
     case ElementType::Shape:
         return static_cast<const ShapeElement&>(*a).isObject && static_cast<const ShapeElement&>(*b).isObject;
     case ElementType::Group: return true;
@@ -26,6 +27,28 @@ bool tweenable(const ElementPtr& a, const ElementPtr& b)
 }
 
 } // namespace
+
+bool tweenAnimates(const Layer& layer, int keyIndex)
+{
+    if (keyIndex < 0 || keyIndex + 1 >= int(layer.keys.size())) return false;
+    const Keyframe& k = layer.keys[keyIndex];
+    const Keyframe& next = layer.keys[keyIndex + 1];
+    if (k.elements.empty() || next.elements.empty()) return false;
+    switch (k.tween) {
+    case TweenType::Classic:
+        for (size_t i = 0; i < k.elements.size() && i < next.elements.size(); ++i)
+            if (tweenable(k.elements[i], next.elements[i])) return true;
+        return false;
+    case TweenType::Shape: {
+        auto hasShape = [](const Keyframe& key) {
+            return std::any_of(key.elements.begin(), key.elements.end(), [](const ElementPtr& e) { return asShape(e) != nullptr; });
+        };
+        return hasShape(k) && hasShape(next);
+    }
+    case TweenType::None: break;
+    }
+    return false;
+}
 
 std::vector<std::vector<Cubic>> guideChains(const Timeline& tl, int guideLayerIndex, int frame)
 {

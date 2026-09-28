@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "MainWindow.h"
+#include "CrashHandler.h"
 #include "Dialogs.h"
 #include "Icons.h"
 #include "StageCanvas.h"
@@ -23,6 +24,11 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDesktopServices>
+#include <QLoggingCategory>
+#include <QSaveFile>
+#include <QScreen>
+#include <QThreadPool>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -30,6 +36,7 @@
 #include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
@@ -46,6 +53,8 @@
 namespace vx::app {
 
 using ui::Theme;
+
+Q_LOGGING_CATEGORY(lcApp, "vx.app")
 
 namespace {
 
@@ -79,6 +88,32 @@ MainWindow::MainWindow(Editor* editor, QWidget* parent) : QMainWindow(parent), m
         m_coords->setText(QString("X %1   Y %2").arg(x, 0, 'f', 1).arg(y, 0, 'f', 1));
     });
     connect(m_stage, &StageView::zoomChanged, this, [this](double z) { m_zoomLabel->setText(QString("%1%").arg(int(std::round(z * 100)))); });
+    connect(m_stage, &StageView::contextMenuRequested, this, &MainWindow::stageContextMenu);
+
+    // Crash reports: what is open, and a last chance for unsaved work.
+    auto documentContext = [this]() {
+        crash::setContext("Document", m_ed->filePath().isEmpty() ? QString("untitled") : QDir::toNativeSeparators(m_ed->filePath()));
+        // Saved: the recovery copy is out of date.
+        if (!m_ed->isDirty() && !crash::recoveryPath().isEmpty()) QFile::remove(crash::recoveryPath());
+    };
+    connect(m_ed, &Editor::pathChanged, this, documentContext);
+    documentContext();
+    if (const QScreen* screen = QGuiApplication::primaryScreen())
+        crash::setContext("Screen", QString("%1x%2 at %3x").arg(screen->size().width()).arg(screen->size().height()).arg(screen->devicePixelRatio()));
+    crash::setEmergencySave([ed = m_ed](const QString& path) {
+        if (!ed->isDirty()) return crash::Saved::Nothing;
+        const QByteArray data = serializeDocument(ed->doc());
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(data) != data.size()) return crash::Saved::Failed;
+        f.close();
+        QFile original(path + ".path");
+        if (original.open(QIODevice::WriteOnly | QIODevice::Truncate)) original.write(ed->filePath().toUtf8());
+        return crash::Saved::Saved;
+    });
+    auto* autosaveTimer = new QTimer(this);
+    autosaveTimer->setInterval(2 * 60 * 1000);
+    connect(autosaveTimer, &QTimer::timeout, this, &MainWindow::autosave);
+    autosaveTimer->start();
 
     QSettings s;
     resize(1480, 920);
@@ -92,6 +127,7 @@ MainWindow::MainWindow(Editor* editor, QWidget* parent) : QMainWindow(parent), m
 
 MainWindow::~MainWindow()
 {
+    crash::setEmergencySave(nullptr);
     // Qt 6.8.4 deletes the status bar's layout item before the dock tab
     // bars, whose destruction then walks the layout: remove it first.
     delete statusBar();
@@ -327,6 +363,9 @@ void MainWindow::createActions()
 
     // Help
     add("hotkeys", tr("Keyboard Shortcuts"), QKeySequence(Qt::Key_F1), [this] { HotkeysDialog(m_actionOrder, this).exec(); });
+    add("crashReports", tr("Logs and Crash Reports…"), {}, [] {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(crash::dataDir()));
+    });
     add("about", tr("About Vertexa"), {}, [this] {
         QMessageBox::about(this, tr("About Vertexa"),
                            tr("<h2>Vertexa %1</h2><p>Open-source 2D vector animation studio.</p>"
@@ -432,6 +471,7 @@ void MainWindow::createMenus()
     m_windowMenu = menuBar()->addMenu(tr("&Window"));
     QMenu* help = menuBar()->addMenu(tr("&Help"));
     help->addAction(a("hotkeys"));
+    help->addAction(a("crashReports"));
     help->addAction(a("about"));
 }
 
@@ -575,7 +615,9 @@ bool MainWindow::save()
 {
     if (m_ed->filePath().isEmpty()) return saveAs();
     QString err;
+    qCInfo(lcApp).noquote() << "Save:" << m_ed->filePath();
     if (!saveDocument(m_ed->doc(), m_ed->filePath(), &err)) {
+        qCWarning(lcApp).noquote() << "Save failed:" << err;
         QMessageBox::warning(this, tr("Save failed"), err);
         return false;
     }
@@ -652,6 +694,7 @@ bool MainWindow::importFlaFile(const QString& path)
 
 bool MainWindow::openFile(const QString& path)
 {
+    qCInfo(lcApp).noquote() << "Open:" << path;
     if (io::detectFla(path) != io::FlaFormat::Unknown) return importFlaFile(path);
     Document d;
     QString err;
@@ -775,6 +818,49 @@ void MainWindow::convertToSymbol()
         m_ed->convertSelectionToSymbol(dlg.name(), dlg.type(), dlg.registration(), dlg.folder(), dlg.scale9());
 }
 
+void MainWindow::stageContextMenu(const QPoint& globalPos)
+{
+    QMenu menu(this);
+    auto add = [this](QMenu* m, const char* name) {
+        if (QAction* a = m_actions.value(name)) m->addAction(a);
+    };
+    const bool selection = m_ed->hasSelection();
+    const auto els = m_ed->selectedElements();
+    bool instance = false, group = false, whole = false;
+    for (const ElementPtr& e : els) {
+        instance |= e->type() == ElementType::Instance;
+        group |= e->type() == ElementType::Group;
+        const ShapeElement* s = asShape(e);
+        whole |= !s || s->isObject;
+    }
+    if (selection) {
+        for (const char* n : {"cut", "copy"}) add(&menu, n);
+    }
+    for (const char* n : {"paste", "pasteInPlace"}) add(&menu, n);
+    if (selection) {
+        for (const char* n : {"duplicate", "clear"}) add(&menu, n);
+        menu.addSeparator();
+        add(&menu, "convertToSymbol");
+        if (whole) add(&menu, "breakApart");
+        add(&menu, "group");
+        if (group) add(&menu, "ungroup");
+        if (instance && els.size() == 1) add(&menu, "editSymbols");
+        menu.addSeparator();
+        QMenu* transform = menu.addMenu(tr("Transform"));
+        transform->addAction(tr("Free Transform"), this, [this] { m_ed->setTool(ToolId::FreeTransform); });
+        transform->addSeparator();
+        for (const char* n : {"rotateCW", "rotateCCW", "flipH", "flipV"}) add(transform, n);
+        if (!els.empty()) {
+            QMenu* arrange = menu.addMenu(tr("Arrange"));
+            for (const char* n : {"bringToFront", "bringForward", "sendBackward", "sendToBack"}) add(arrange, n);
+        }
+    }
+    menu.addSeparator();
+    add(&menu, "selectAll");
+    if (selection) add(&menu, "deselectAll");
+    menu.exec(globalPos);
+}
+
 void MainWindow::toggleEditSymbol()
 {
     if (m_ed->inSymbol()) {
@@ -802,6 +888,12 @@ void MainWindow::closeEvent(QCloseEvent* e)
 
 void MainWindow::reportRenderer()
 {
+    QString renderer;
+    if (m_stage->gpuStage()) renderer = QString("RHI, %1").arg(m_stage->gpuStageDevice());
+    else if (GlRenderer* gpu = GlRenderer::instance()) renderer = QString("OpenGL, %1").arg(gpu->deviceName());
+    else renderer = GlRenderer::enabled() ? QString("CPU (no suitable GPU)") : QString("CPU");
+    crash::setContext("Renderer", renderer);
+    qCInfo(lcApp).noquote() << "Renderer:" << renderer;
     if (m_stage->gpuStage()) {
         m_ed->notify(tr("Stage drawn on the GPU: %1").arg(m_stage->gpuStageDevice()));
         return;
@@ -809,6 +901,48 @@ void MainWindow::reportRenderer()
     if (GlRenderer* gpu = GlRenderer::instance()) m_ed->notify(tr("Rendering on the GPU: %1").arg(gpu->deviceName()));
     else if (GlRenderer::enabled()) m_ed->notify(tr("No suitable GPU (OpenGL 3.3): rendering on the CPU"));
     else m_ed->notify(tr("Rendering on the CPU"));
+}
+
+void MainWindow::autosave()
+{
+    const QString path = crash::recoveryPath();
+    if (path.isEmpty() || !m_ed->isDirty()) return;
+    // A copy is cheap (elements are shared); writing it happens off the GUI thread.
+    QThreadPool::globalInstance()->start([doc = m_ed->doc(), path]() {
+        QSaveFile f(path);
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(serializeDocument(doc));
+            f.commit();
+        }
+    });
+    crash::setRecoveredDocument(m_ed->filePath());
+}
+
+void MainWindow::checkLastSession()
+{
+    for (const crash::Session& s : crash::uncleanSessions()) {
+        if (s.report.isEmpty() && s.recovery.isEmpty()) continue;
+        qCWarning(lcApp).noquote() << "The session" << s.id << "did not end normally" << (s.report.isEmpty() ? QString() : "; report " + s.report);
+        CrashDialog dlg(s, this);
+        dlg.exec();
+        if (dlg.choice() == CrashDialog::Choice::Discard) crash::discardRecovery(s);
+        if (dlg.choice() == CrashDialog::Choice::Restore && maybeSave()) {
+            Document d;
+            QString err;
+            if (!loadDocument(s.recovery, d, &err)) {
+                QMessageBox::warning(this, tr("Restore failed"), tr("%1\n\n%2").arg(s.recovery, err));
+                return;
+            }
+            m_ed->setDocument(std::move(d), {});
+            m_ed->markDirty();
+            m_stage->fitStage();
+            crash::discardRecovery(s);
+            const QString name = s.originalPath.isEmpty() ? tr("the untitled document") : QFileInfo(s.originalPath).fileName();
+            m_ed->notify(tr("Restored the unsaved work of %1: save it to keep it").arg(name));
+        }
+        // One dialog: the newest session with something to show.
+        return;
+    }
 }
 
 } // namespace vx::app

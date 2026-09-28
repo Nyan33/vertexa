@@ -189,8 +189,10 @@ void Arrangement::build()
                 ++k;
             }
         }
+        const int gj = m_inputs[pieces[j].input].group;
         for (int i : active) {
             if (!bb[i].intersects(bb[j], m_eps)) continue;
+            if (gj >= 0 && m_inputs[pieces[i].input].group == gj) continue;
             hits.clear();
             intersectCurves(pieces[i].c, pieces[j].c, hits, m_eps);
             for (const CurveHit& h : hits) {

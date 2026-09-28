@@ -62,10 +62,13 @@ public:
     /// Render loose elements (e.g. a floating selection) into `target`.
     void renderItems(QImage& target, const std::vector<EvalItem>& items, const Affine& view, const ColorTransform& ct = {});
 
-    /// Seam-free shape rendering (fills through the scanline rasteriser,
-    /// strokes through QPainter).
+    /// Seam-free shape rendering: fills and stroke outlines through the
+    /// scanline rasteriser, cosmetic strokes through QPainter.
     static void renderShape(QImage& target, const ShapeRenderData& rd, const Affine& m, const ColorTransform& ct,
                             const QRect& clip);
+    /// The same with the stroke outlines kept between draws while `rd` lives.
+    static void renderShape(QImage& target, const std::shared_ptr<const ShapeRenderData>& rd, const Affine& m,
+                            const ColorTransform& ct, const QRect& clip);
     static void renderOutline(QImage& target, const ShapeRenderData& rd, const Affine& m, const QColor& color,
                               const QRect& clip);
 

@@ -21,6 +21,8 @@ namespace vx {
 struct RasterFill {
     const std::vector<Contour>* contours = nullptr; ///< shape space
     FillStyle style;
+    /// Sets of closed polylines (shape space), already flat: stroke outlines.
+    std::vector<const std::vector<std::vector<Vec2>>*> polygons;
 };
 
 /// Rasterise fills (shape space) through `toDevice` onto a premultiplied

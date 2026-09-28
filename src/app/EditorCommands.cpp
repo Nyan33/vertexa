@@ -302,6 +302,7 @@ void Editor::transformSelection(const Affine& m, const QString& label)
         }
         m_shapePick = np.valid() ? np : ShapePick{};
     }
+    if (m_selectionPivot) m_selectionPivot = m.map(*m_selectionPivot);
     emit selectionChanged();
 }
 
@@ -804,25 +805,31 @@ void Editor::clearFrames()
 void Editor::createTween(TweenType t)
 {
     const Range r = frameRange(*this);
-    bool missingNext = false;
+    bool missingNext = false, noShapes = false;
     edit(t == TweenType::Classic ? tr("Create Classic Tween") : tr("Create Shape Tween"), [&](Document& d) {
         Timeline& tl = mutableTimeline(d);
         bool changed = false;
         for (int li = r.layerFrom; li <= r.layerTo && li < int(tl.layers.size()); ++li) {
             if (tl.layers[li].type == LayerType::Folder) continue;
-            // Every keyframe span touched by the selection gets the tween.
-            std::set<int> starts;
+            // Every keyframe span touched by the selection gets the tween;
+            // with several, the last keyframe is where they end.
+            std::vector<int> starts;
             for (int f = r.frameFrom; f <= r.frameTo; ++f)
-                if (const Keyframe* k = tl.layers[li].keyAt(f)) starts.insert(k->start);
+                if (const Keyframe* k = tl.layers[li].keyAt(f); k && (starts.empty() || starts.back() != k->start))
+                    starts.push_back(k->start);
+            if (starts.size() > 1 && tl.layers[li].keyIndexAt(starts.back()) + 1 >= int(tl.layers[li].keys.size())) starts.pop_back();
             for (int s : starts) {
                 const bool ok = t == TweenType::Classic ? vx::createClassicTween(d, tl, li, s) : vx::createShapeTween(d, tl, li, s);
                 missingNext |= !ok;
+                const Layer& l = tl.layers[li];
+                if (ok && t == TweenType::Shape && !tweenAnimates(l, l.keyIndexAt(s))) noShapes = true;
                 changed = true;
             }
         }
         return changed;
     });
-    if (missingNext) notify(tr("Tween created — add a keyframe at its end (F6) to complete it"));
+    if (noShapes) notify(tr("Shape tweens morph shapes: break symbols and groups apart first (Ctrl+B)"));
+    else if (missingNext) notify(tr("Tween created — add a keyframe at its end (F6) to complete it"));
 }
 
 void Editor::removeTween()

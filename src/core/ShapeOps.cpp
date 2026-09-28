@@ -36,6 +36,9 @@ public:
         m_baseFill = mapFills(g);
         m_baseStroke = mapStrokes(g);
         m_nBase = int(g.edges.size());
+        // A planar base (a drawing merged before) is only intersected with
+        // what is added to it.
+        const int group = g.isPlanar() ? 0 : -1;
         for (int i = 0; i < m_nBase; ++i) {
             ArrInput in;
             in.curve = g.edges[i].c;
@@ -43,6 +46,7 @@ public:
             in.labelLeft = m_baseFill[g.edges[i].fillL];
             in.labelRight = m_baseFill[g.edges[i].fillR];
             in.tag = i;
+            in.group = group;
             m_own.add(in);
         }
     }
@@ -136,6 +140,7 @@ public:
             if (S != 0 || L != R) g.edges.push_back({a.edges()[e].curve, L, R, S});
         }
         g.compact();
+        g.markPlanar();
         return g;
     }
 
@@ -178,6 +183,7 @@ ShapeGraph emitFromTopology(const ShapeGraph& g, const std::function<int(int fac
         if (S != 0 || L != R) out.edges.push_back({a.edges()[e].curve, L, R, S});
     }
     out.compact();
+    out.markPlanar();
     return out;
 }
 
@@ -415,7 +421,15 @@ ShapeGraph overlay(const ShapeGraph& base, const ShapeGraph& top, const OverlayO
     if (opt.localized && base.edges.size() > kLocalityThreshold) {
         ShapeGraph near;
         std::vector<int> far;
-        if (splitByReach(base, top.bounds(true).inflated(1e-6), near, far)) return joinFar(overlay(near, top, opt), base, far);
+        if (splitByReach(base, top.bounds(true).inflated(1e-6), near, far)) {
+            // Parts of a planar graph, and components that don't reach the
+            // new shape, don't cross anything either.
+            const bool planar = base.isPlanar();
+            if (planar) near.markPlanar();
+            ShapeGraph out = joinFar(overlay(near, top, opt), base, far);
+            if (planar) out.markPlanar();
+            return out;
+        }
     }
     const bool useMask = opt.mask && (opt.mode == PaintMode::Selection || opt.mode == PaintMode::Inside);
     Engine e(useMask ? 1 : 0);
@@ -455,7 +469,11 @@ ShapeGraph erase(const ShapeGraph& base, const Region& eraser, EraseMode mode, c
         std::vector<int> far;
         if (splitByReach(base, eraser.bounds().inflated(1e-6), near, far)) {
             if (near.isEmpty()) return base;
-            return joinFar(erase(near, eraser, mode, mask), base, far);
+            const bool planar = base.isPlanar();
+            if (planar) near.markPlanar();
+            ShapeGraph out = joinFar(erase(near, eraser, mode, mask), base, far);
+            if (planar) out.markPlanar();
+            return out;
         }
     }
     Engine e(mask ? 2 : 1);

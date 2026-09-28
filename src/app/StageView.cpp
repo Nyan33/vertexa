@@ -14,6 +14,7 @@
 #include "render/QtConvert.h"
 #include "render/Renderer.h"
 
+#include <QContextMenuEvent>
 #include <QDragEnterEvent>
 #include <QMimeData>
 #include <QNativeGestureEvent>
@@ -31,6 +32,10 @@ namespace vx::app {
 QPointF Tool::toWidget(Vec2 p) const { return toQPoint(view->timelineToWidget().map(p)); }
 double Tool::unitsPerPixel() const { return view->unitsPerPixel(); }
 void Tool::update() const { view->update(); }
+void Tool::update(const QRectF& r) const
+{
+    if (!r.isEmpty()) view->update(r.toAlignedRect().adjusted(-2, -2, 2, 2));
+}
 
 // --- StageView -----------------------------------------------------------------------------
 
@@ -379,11 +384,16 @@ void StageView::drawSelection(QPainter& p)
     const Timeline& tl = m_ed->timeline();
     p.save();
     p.setRenderHint(QPainter::Antialiasing);
+    // Several things selected: a box around all of them (widget space).
+    QRectF all;
+    int count = 0;
     for (const ElementRef& r : m_ed->selection()) {
         const Layer* l = tl.layerById(r.layerId);
         const Keyframe* k = l ? l->keyAt(m_ed->frame()) : nullptr;
         const ElementPtr e = m_ed->shownElement(r);
         if (!k || !e) continue;
+        ++count;
+        all |= qt.mapRect(toQRect(elementBounds(d, *e, m_ed->frame() - k->start)));
         if (const ShapeElement* s = asShape(e); s && !s->isObject) {
             const QPainterPath fills = qt.map(toQPath(s->graph->fillRegion(0)));
             QBrush hatch(ui::withAlpha(pal.selection, 200), Qt::Dense6Pattern);
@@ -426,6 +436,14 @@ void StageView::drawSelection(QPainter& p)
         p.setPen(QPen(pal.selection, 2.0, Qt::DotLine));
         p.setBrush(Qt::NoBrush);
         p.drawPath(qt.map(strokes));
+        ++count;
+        all |= qt.mapRect(toQRect(lifted.bounds(true)));
+    }
+    // Free Transform draws its own box around the selection.
+    if (count > 1 && !all.isEmpty() && m_ed->tool() != ToolId::FreeTransform) {
+        p.setPen(QPen(ui::withAlpha(pal.selection, 170), 1.0, Qt::DashLine));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(all.adjusted(-3, -3, 3, 3));
     }
     p.restore();
 }
@@ -560,6 +578,14 @@ void StageView::mousePressEvent(QMouseEvent* ev)
         return;
     }
     if (Tool* t = strokeTool()) t->press(te);
+}
+
+void StageView::contextMenuEvent(QContextMenuEvent* ev)
+{
+    if (m_panning) return;
+    if (Tool* t = strokeTool(); t && t->busy()) return;
+    selectUnder(m_ed, widgetToTimeline(ev->pos()), 4.0 * unitsPerPixel());
+    emit contextMenuRequested(ev->globalPos());
 }
 
 bool StageView::hasPendingWork() const

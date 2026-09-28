@@ -4,7 +4,9 @@
 #include "ShapeTween.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
+#include <optional>
 
 namespace vx {
 
@@ -105,6 +107,71 @@ int tweenSymbolCounter(const Document& doc)
     int n = 1;
     while (doc.symbolByName("Tween " + std::to_string(n))) ++n;
     return n;
+}
+
+/// The one drawing of a keyframe (its merge shape or a single drawing
+/// object), in timeline space.
+std::optional<ShapeGraph> soleDrawing(const Keyframe& k)
+{
+    if (k.elements.size() != 1) return std::nullopt;
+    const ShapeElement* s = asShape(k.elements.front());
+    if (!s || !s->graph || s->graph->isEmpty()) return std::nullopt;
+    return s->matrix.isIdentity() ? *s->graph : s->graph->transformed(s->matrix);
+}
+
+/// Affine map through three point pairs (none if the points are collinear).
+std::optional<Affine> mapThrough(const Vec2 p[3], const Vec2 q[3])
+{
+    const Affine from(p[1].x - p[0].x, p[1].y - p[0].y, p[2].x - p[0].x, p[2].y - p[0].y, p[0].x, p[0].y);
+    const Affine to(q[1].x - q[0].x, q[1].y - q[0].y, q[2].x - q[0].x, q[2].y - q[0].y, q[0].x, q[0].y);
+    if (std::abs(from.det()) < 1e-9) return std::nullopt;
+    return to * from.inverted();
+}
+
+bool sameLooks(const ShapeGraph& a, const ShapeGraph& b)
+{
+    if (a.fills.size() != b.fills.size() || a.strokes.size() != b.strokes.size()) return false;
+    for (size_t i = 0; i < a.fills.size(); ++i)
+        if (a.fills[i].kind != b.fills[i].kind || !(a.fills[i].mainColor() == b.fills[i].mainColor())) return false;
+    for (size_t i = 0; i < a.strokes.size(); ++i)
+        if (!(a.strokes[i].paint.mainColor() == b.strokes[i].paint.mainColor())) return false;
+    return true;
+}
+
+/// The affine map taking drawing `a` onto drawing `b` when `b` is `a` moved,
+/// scaled, rotated or skewed (as the Free Transform tool leaves it).
+std::optional<Affine> drawingMap(const ShapeGraph& a, const ShapeGraph& b)
+{
+    if (a.edges.empty() || a.edges.size() != b.edges.size() || !sameLooks(a, b)) return std::nullopt;
+    const double tol = 1e-4 * std::max({1.0, a.bounds(false).width(), a.bounds(false).height()});
+    std::vector<Vec2> pa, pb;
+    for (size_t i = 0; i < a.edges.size(); ++i) {
+        const GEdge &ea = a.edges[i], &eb = b.edges[i];
+        if (ea.fillL != eb.fillL || ea.fillR != eb.fillR || ea.stroke != eb.stroke) return std::nullopt;
+        for (Vec2 v : {ea.c.p0, ea.c.p1, ea.c.p2, ea.c.p3}) pa.push_back(v);
+        for (Vec2 v : {eb.c.p0, eb.c.p1, eb.c.p2, eb.c.p3}) pb.push_back(v);
+    }
+    // Three well spread points: the first, the farthest from it, the
+    // farthest from the line through both.
+    size_t i1 = 0, i2 = 0;
+    double best = 0;
+    for (size_t i = 0; i < pa.size(); ++i)
+        if (const double d = distance(pa[i], pa[0]); d > best) {
+            best = d;
+            i1 = i;
+        }
+    best = 0;
+    for (size_t i = 0; i < pa.size(); ++i)
+        if (const double d = std::abs(cross(pa[i1] - pa[0], pa[i] - pa[0])); d > best) {
+            best = d;
+            i2 = i;
+        }
+    const Vec2 p[3] = {pa[0], pa[i1], pa[i2]}, q[3] = {pb[0], pb[i1], pb[i2]};
+    const std::optional<Affine> m = mapThrough(p, q);
+    if (!m) return std::nullopt;
+    for (size_t i = 0; i < pa.size(); ++i)
+        if (distance(m->map(pa[i]), pb[i]) > tol * std::max(1.0, m->meanScale())) return std::nullopt;
+    return m;
 }
 
 } // namespace
@@ -227,10 +294,26 @@ bool createClassicTween(Document& doc, Timeline& tl, int layerIndex, int frame)
                                     SymbolType::Graphic, b.isEmpty() ? Vec2{} : b.center());
         k.elements = {inst};
     };
+    Keyframe* next = ki + 1 < int(l.keys.size()) ? &l.keys[ki + 1] : nullptr;
+    // The same drawing moved, scaled or rotated in the next keyframe: both
+    // keyframes show one symbol, so the tween interpolates the transform.
+    std::optional<Affine> map;
+    if (next)
+        if (const auto a = soleDrawing(l.keys[ki]))
+            if (const auto b = soleDrawing(*next)) map = drawingMap(*a, *b);
     symbolize(l.keys[ki]);
-    if (ki + 1 < int(l.keys.size())) symbolize(l.keys[ki + 1]);
+    if (next) {
+        const Keyframe& k = l.keys[ki];
+        if (map && k.elements.size() == 1 && k.elements.front()->type() == ElementType::Instance) {
+            auto inst = k.elements.front()->cloneAs<InstanceElement>();
+            inst->matrix = *map * inst->matrix;
+            next->elements = {inst};
+        } else {
+            symbolize(*next);
+        }
+    }
     l.keys[ki].tween = TweenType::Classic;
-    return ki + 1 < int(l.keys.size());
+    return next != nullptr;
 }
 
 bool createShapeTween(Document& doc, Timeline& tl, int layerIndex, int frame)

@@ -5,11 +5,15 @@
 #include "core/Evaluate.h"
 #include "core/TimelineOps.h"
 
+#include <QLoggingCategory>
 #include <QTimer>
 #include <QUndoCommand>
 #include <QUndoStack>
 
 namespace vx::app {
+
+// What the user did, for the log and crash reports.
+Q_LOGGING_CATEGORY(lcEdit, "vx.edit")
 
 double ToolSettings::gapPixels() const
 {
@@ -29,13 +33,18 @@ public:
           m_sa(std::move(sa))
     {
     }
-    void undo() override { m_editor->restore(m_before, m_sb); }
+    void undo() override
+    {
+        qCInfo(lcEdit).noquote() << "Undo:" << text();
+        m_editor->restore(m_before, m_sb);
+    }
     void redo() override
     {
         if (m_first) {
             m_first = false;
             return;
         }
+        qCInfo(lcEdit).noquote() << "Redo:" << text();
         m_editor->restore(m_after, m_sa);
     }
 
@@ -70,6 +79,7 @@ void Editor::setPreview(std::optional<Document> d)
 
 void Editor::setDocument(Document d, const QString& path)
 {
+    qCInfo(lcEdit).noquote() << "Document:" << (path.isEmpty() ? QString("untitled") : path) << QString("(%1 symbols, %2 scenes)").arg(d.symbols.size()).arg(d.scenes.size());
     setPlaying(false);
     m_doc = std::move(d);
     m_preview.reset();
@@ -82,6 +92,7 @@ void Editor::setDocument(Document d, const QString& path)
     m_frameSel = {};
     m_selection.clear();
     m_shapePick = {};
+    m_selectionPivot.reset();
     validateState();
     emit documentChanged();
     emit contextChanged();
@@ -98,6 +109,12 @@ void Editor::setFilePath(const QString& p)
 }
 
 bool Editor::isDirty() const { return !m_undo->isClean(); }
+void Editor::markDirty()
+{
+    m_undo->resetClean();
+    emit pathChanged();
+}
+
 void Editor::markClean()
 {
     m_undo->setClean();
@@ -106,6 +123,7 @@ void Editor::markClean()
 
 bool Editor::edit(const QString& label, const std::function<bool(Document&)>& fn)
 {
+    qCInfo(lcEdit).noquote() << "Edit:" << label << QString("(frame %1, layer %2)").arg(m_frame + 1).arg(m_layer);
     const bool hadPreview = m_preview.has_value();
     m_preview.reset();
     Document d = m_doc;
@@ -135,6 +153,7 @@ void Editor::restore(const Document& d, const State& s)
     m_layer = s.layer;
     m_selection.clear();
     m_shapePick = {};
+    m_selectionPivot.reset();
     validateState();
     emit documentChanged();
     if (ctxChanged) emit contextChanged();
@@ -400,12 +419,14 @@ void Editor::tick()
 void Editor::setSelection(std::vector<ElementRef> s)
 {
     m_selection = std::move(s);
+    m_selectionPivot.reset();
     emit selectionChanged();
 }
 
 void Editor::setShapePick(ShapePick p)
 {
     m_shapePick = std::move(p);
+    m_selectionPivot.reset();
     emit selectionChanged();
 }
 
@@ -414,6 +435,13 @@ void Editor::clearSelection()
     if (m_selection.empty() && !m_shapePick.valid()) return;
     m_selection.clear();
     m_shapePick = {};
+    m_selectionPivot.reset();
+    emit selectionChanged();
+}
+
+void Editor::setSelectionPivot(std::optional<Vec2> p)
+{
+    m_selectionPivot = p;
     emit selectionChanged();
 }
 
@@ -498,13 +526,14 @@ bool Editor::canEdit(int layerIndex, QString* why) const
     return true;
 }
 
-Keyframe* Editor::editableKey(Document& d, int layerIndex, QString* why) const
+Keyframe* Editor::editableKey(Document& d, int layerIndex, QString* why, int frame) const
 {
     if (!canEdit(layerIndex, why)) return nullptr;
+    if (frame < 0) frame = m_frame;
     Timeline& tl = mutableTimeline(d);
     Layer& l = tl.layers[layerIndex];
-    if (m_frame >= l.length()) vx::insertKeyframe(d, tl, layerIndex, m_frame, true);
-    return tl.layers[layerIndex].keyAt(m_frame);
+    if (frame >= l.length()) vx::insertKeyframe(d, tl, layerIndex, frame, true);
+    return tl.layers[layerIndex].keyAt(frame);
 }
 
 Keyframe* Editor::selectionKey(Document& d, int layerIndex) const
@@ -520,6 +549,7 @@ void Editor::notify(const QString& msg) { emit message(msg); }
 void Editor::setTool(ToolId t)
 {
     if (t == m_tool) return;
+    qCInfo(lcEdit).noquote() << "Tool:" << toolName(t);
     m_tool = t;
     emit toolChanged(t);
 }

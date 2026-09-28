@@ -180,6 +180,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/Vertexa | Out-Null
           Copy-Item build/src/app/vertexa.exe dist/Vertexa/
+          # Symbols: crash reports name the functions on the stack.
+          Copy-Item build/src/app/vertexa.pdb dist/Vertexa/
           windeployqt --release --no-translations --compiler-runtime dist/Vertexa/vertexa.exe
           Copy-Item LICENSE dist/Vertexa/LICENSE.txt
           Copy-Item resources/fonts/OFL.txt dist/Vertexa/FONTS-OFL.txt

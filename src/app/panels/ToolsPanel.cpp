@@ -11,6 +11,9 @@
 #include <QPainter>
 #include <QToolTip>
 #include <QVariantAnimation>
+#include <QWheelEvent>
+
+#include <cmath>
 
 namespace vx::app {
 
@@ -28,6 +31,10 @@ const std::vector<std::vector<ToolId>> kGroups = {
 
 constexpr double kItemH = 36.0;
 constexpr double kTop = 10.0;
+constexpr int kWidth[3] = {0, 56, 96}; ///< panel width per column count
+/// Two columns kick in below the one-column height and stay until there is
+/// this much more room (no flicker at the threshold).
+constexpr double kHysteresis = 24.0;
 
 } // namespace
 
@@ -86,12 +93,12 @@ QString ToolsPanel::iconFor(ToolId id)
 ToolsPanel::ToolsPanel(Editor* editor, QWidget* parent) : QWidget(parent), m_ed(editor)
 {
     setMouseTracking(true);
-    setFixedWidth(56);
+    setFixedWidth(kWidth[1]);
     m_anim = new QVariantAnimation(this);
     m_anim->setDuration(260);
     m_anim->setEasingCurve(QEasingCurve::OutBack);
     connect(m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
-        m_indicatorY = v.toDouble();
+        m_indicator = v.toPointF();
         update();
     });
     m_stroke = new ColorSwatch(this);
@@ -130,10 +137,11 @@ ToolsPanel::ToolsPanel(Editor* editor, QWidget* parent) : QWidget(parent), m_ed(
         for (const Item& it : m_items)
             if (it.id == m_ed->tool()) {
                 m_anim->stop();
-                m_anim->setStartValue(m_indicatorY);
-                m_anim->setEndValue(it.rect.top());
+                m_anim->setStartValue(m_indicator);
+                m_anim->setEndValue(it.rect.topLeft());
                 m_anim->start();
             }
+        revealTool();
         update();
     });
     connect(m_ed, &Editor::settingsChanged, this, &ToolsPanel::syncSwatches);
@@ -142,34 +150,101 @@ ToolsPanel::ToolsPanel(Editor* editor, QWidget* parent) : QWidget(parent), m_ed(
     syncSwatches();
 }
 
-QSize ToolsPanel::sizeHint() const { return {56, 760}; }
+QSize ToolsPanel::sizeHint() const { return {kWidth[m_cols], int(contentHeight(1))}; }
+
+double ToolsPanel::contentHeight(int cols)
+{
+    double y = kTop;
+    for (size_t g = 0; g < kGroups.size(); ++g) {
+        if (g > 0) y += 11;
+        y += std::ceil(double(kGroups[g].size()) / cols) * (kItemH + 2);
+    }
+    // Swatches, swap button and object drawing toggle below the tools.
+    return y + (cols == 1 ? 152 : 118);
+}
 
 void ToolsPanel::layoutItems()
 {
     m_items.clear();
     m_separators.clear();
+    const double w = width();
+    const double itemW = (w - 12 - (m_cols - 1) * 2) / m_cols;
     double y = kTop;
     for (size_t g = 0; g < kGroups.size(); ++g) {
         if (g > 0) {
             m_separators.push_back(y + 5);
             y += 11;
         }
-        for (ToolId id : kGroups[g]) {
-            m_items.push_back({id, QRectF(6, y, width() - 12, kItemH)});
-            y += kItemH + 2;
+        const auto& group = kGroups[g];
+        for (size_t i = 0; i < group.size(); ++i) {
+            const int col = int(i) % m_cols;
+            m_items.push_back({group[i], QRectF(6 + col * (itemW + 2), y, itemW, kItemH)});
+            if (col == m_cols - 1 || i + 1 == group.size()) y += kItemH + 2;
         }
     }
     for (const Item& it : m_items)
-        if (it.id == m_ed->tool()) m_indicatorY = it.rect.top();
+        if (it.id == m_ed->tool()) m_indicator = it.rect.topLeft();
     const double sy = y + 14;
-    const int cx = (width() - 30) / 2;
-    m_stroke->move(cx, int(sy));
-    m_fill->move(cx, int(sy + 32));
-    m_swapButton = QRectF(width() / 2.0 - 9, sy + 68, 18, 18);
-    m_objectToggle = QRectF(8, sy + 94, width() - 16, 34);
+    if (m_cols == 1) {
+        const double cx = (w - 30) / 2;
+        m_strokePos = {cx, sy};
+        m_fillPos = {cx, sy + 32};
+        m_swapButton = QRectF(w / 2.0 - 9, sy + 68, 18, 18);
+        m_objectToggle = QRectF(8, sy + 94, w - 16, 34);
+    } else {
+        m_strokePos = {w / 2 - 33, sy};
+        m_fillPos = {w / 2 + 3, sy};
+        m_swapButton = QRectF(w / 2.0 - 9, sy + 36, 18, 18);
+        m_objectToggle = QRectF(8, sy + 60, w - 16, 34);
+    }
+    m_contentH = contentHeight(m_cols);
+    setScroll(m_scroll);
 }
 
-void ToolsPanel::resizeEvent(QResizeEvent*) { layoutItems(); }
+void ToolsPanel::setScroll(double y)
+{
+    m_scroll = std::clamp(y, 0.0, std::max(0.0, m_contentH - height()));
+    m_stroke->move((m_strokePos - QPointF(0, m_scroll)).toPoint());
+    m_fill->move((m_fillPos - QPointF(0, m_scroll)).toPoint());
+    update();
+}
+
+void ToolsPanel::revealTool()
+{
+    for (const Item& it : m_items) {
+        if (it.id != m_ed->tool()) continue;
+        if (it.rect.top() - 4 < m_scroll) setScroll(it.rect.top() - 4);
+        else if (it.rect.bottom() + 4 > m_scroll + height()) setScroll(it.rect.bottom() + 4 - height());
+    }
+}
+
+void ToolsPanel::resizeEvent(QResizeEvent*)
+{
+    // Short screens: two columns; back to one when there is room again.
+    int cols = m_cols;
+    if (m_cols == 1 && height() < contentHeight(1)) cols = 2;
+    else if (m_cols == 2 && height() >= contentHeight(1) + kHysteresis) cols = 1;
+    if (cols != m_cols) {
+        m_cols = cols;
+        setFixedWidth(kWidth[cols]); // resizes again, with the new width
+        updateGeometry();
+    }
+    layoutItems();
+    revealTool();
+}
+
+void ToolsPanel::wheelEvent(QWheelEvent* e)
+{
+    if (m_contentH <= height()) {
+        e->ignore();
+        return;
+    }
+    const QPoint px = e->pixelDelta();
+    const double dy = !px.isNull() ? px.y() : e->angleDelta().y() / 120.0 * (kItemH + 2);
+    setScroll(m_scroll - dy);
+    m_hover = itemAt(content(e->position()));
+    e->accept();
+}
 
 void ToolsPanel::syncSwatches()
 {
@@ -192,13 +267,24 @@ void ToolsPanel::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing);
     const ui::Palette& pal = Theme::p();
     p.fillRect(rect(), pal.bg1);
+    // Scroll bar: only when the tools don't fit.
+    if (m_contentH > height()) {
+        const double h = height();
+        const double barH = std::max(24.0, h * h / m_contentH);
+        const double barY = (h - barH) * m_scroll / (m_contentH - h);
+        p.setPen(Qt::NoPen);
+        p.setBrush(ui::withAlpha(pal.text3, 110));
+        p.drawRoundedRect(QRectF(width() - 4, barY + 2, 3, barH - 4), 1.5, 1.5);
+    }
+    p.translate(0, -m_scroll);
     // Sliding highlight.
-    const QRectF ind(6, m_indicatorY, width() - 12, kItemH);
+    const double itemW = m_items.empty() ? width() - 12 : m_items.front().rect.width();
+    const QRectF ind(m_indicator.x(), m_indicator.y(), itemW, kItemH);
     p.setPen(Qt::NoPen);
     p.setBrush(ui::withAlpha(pal.accent, 44));
     p.drawRoundedRect(ind, 9, 9);
     p.setBrush(pal.accent);
-    p.drawRoundedRect(QRectF(1, ind.top() + 8, 3.5, ind.height() - 16), 2, 2);
+    if (m_cols == 1) p.drawRoundedRect(QRectF(1, ind.top() + 8, 3.5, ind.height() - 16), 2, 2);
     for (int i = 0; i < int(m_items.size()); ++i) {
         const Item& it = m_items[i];
         const bool active = it.id == m_ed->tool();
@@ -225,12 +311,13 @@ void ToolsPanel::paintEvent(QPaintEvent*)
 
 void ToolsPanel::mousePressEvent(QMouseEvent* e)
 {
-    const int i = itemAt(e->position());
+    const QPointF pos = content(e->position());
+    const int i = itemAt(pos);
     if (i >= 0) {
         m_ed->setTool(m_items[i].id);
         return;
     }
-    if (m_swapButton.adjusted(-4, -4, 4, 4).contains(e->position())) {
+    if (m_swapButton.adjusted(-4, -4, 4, 4).contains(pos)) {
         ToolSettings& s = m_ed->settings();
         const Color f = s.fill.mainColor(), st = s.stroke.paint.mainColor();
         s.fill = FillStyle::solid(st);
@@ -238,7 +325,7 @@ void ToolsPanel::mousePressEvent(QMouseEvent* e)
         m_ed->emitSettingsChanged();
         return;
     }
-    if (m_objectToggle.contains(e->position())) {
+    if (m_objectToggle.contains(pos)) {
         m_ed->settings().objectDrawing = !m_ed->settings().objectDrawing;
         m_ed->emitSettingsChanged();
         update();
@@ -247,7 +334,7 @@ void ToolsPanel::mousePressEvent(QMouseEvent* e)
 
 void ToolsPanel::mouseMoveEvent(QMouseEvent* e)
 {
-    const int h = itemAt(e->position());
+    const int h = itemAt(content(e->position()));
     if (h != m_hover) {
         m_hover = h;
         update();
@@ -264,15 +351,16 @@ bool ToolsPanel::event(QEvent* e)
 {
     if (e->type() == QEvent::ToolTip) {
         auto* he = static_cast<QHelpEvent*>(e);
-        const int i = itemAt(he->pos());
+        const QPointF pos = content(he->pos());
+        const int i = itemAt(pos);
         if (i >= 0) {
             const ToolId id = m_items[i].id;
             QToolTip::showText(he->globalPos(), QString("<b>%1</b>&nbsp;&nbsp;<span style='color:%2'>%3</span>")
                                                      .arg(Editor::toolName(id), Theme::p().text3.name(), shortcutFor(id)),
                                this);
-        } else if (m_objectToggle.contains(he->pos())) {
+        } else if (m_objectToggle.contains(pos)) {
             QToolTip::showText(he->globalPos(), tr("<b>Object Drawing</b>&nbsp;&nbsp;J"), this);
-        } else if (m_swapButton.adjusted(-4, -4, 4, 4).contains(he->pos())) {
+        } else if (m_swapButton.adjusted(-4, -4, 4, 4).contains(pos)) {
             QToolTip::showText(he->globalPos(), tr("<b>Swap Colours</b>&nbsp;&nbsp;X"), this);
         } else {
             QToolTip::hideText();

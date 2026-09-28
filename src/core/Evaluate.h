@@ -19,6 +19,11 @@ struct EvalItem {
     const Element* source = nullptr;
 };
 
+/// Whether the tween of keyframe `keyIndex` animates anything: the next
+/// keyframe has content and, for a classic tween, elements that pair up
+/// (instances, groups, drawing objects), for a shape tween, shapes.
+bool tweenAnimates(const Layer& layer, int keyIndex);
+
 /// Elements visible on a layer at `frame` (bottom to top).
 std::vector<EvalItem> evaluateLayer(const Document& doc, const Timeline& tl, int layerIndex, int frame);
 

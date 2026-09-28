@@ -2,6 +2,7 @@
 #include "ShapeGraph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <unordered_map>
 
@@ -112,7 +113,22 @@ ShapeGraph ShapeGraph::transformed(const Affine& m) const
         if (mirror) std::swap(t.fillL, t.fillR); // orientation flips with a mirror
         g.edges.push_back(t);
     }
+    // An invertible map keeps edges from crossing.
+    if (std::abs(m.det()) > 1e-12 && isPlanar()) g.markPlanar();
     return g;
+}
+
+uint64_t ShapeGraph::edgesHash() const
+{
+    uint64_t h = 0xcbf29ce484222325ull ^ edges.size();
+    for (const GEdge& e : edges)
+        for (const Vec2& p : {e.c.p0, e.c.p1, e.c.p2, e.c.p3})
+            for (const double d : {p.x, p.y}) {
+                uint64_t v;
+                std::memcpy(&v, &d, sizeof v);
+                h = (h ^ v) * 0x100000001b3ull;
+            }
+    return h ? h : 1;
 }
 
 ShapeGraph ShapeGraph::withColorTransform(const ColorTransform& ct) const
@@ -304,6 +320,7 @@ const Arrangement& ShapeGraph::topology() const
     }
     auto arr = std::make_shared<Arrangement>();
     arr->setLayers({LayerKind::Label});
+    const int group = isPlanar() ? 0 : -1;
     for (int i = 0; i < int(edges.size()); ++i) {
         ArrInput in;
         in.curve = edges[i].c;
@@ -311,6 +328,7 @@ const Arrangement& ShapeGraph::topology() const
         in.labelLeft = edges[i].fillL;
         in.labelRight = edges[i].fillR;
         in.tag = i;
+        in.group = group;
         arr->add(in);
     }
     arr->build();

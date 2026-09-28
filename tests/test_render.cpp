@@ -7,10 +7,13 @@
 #include "render/Filters.h"
 #include "render/LayerCache.h"
 #include "render/Raster.h"
+#include "render/QtConvert.h"
 #include "render/Renderer.h"
 #include "render/SvgExport.h"
 
 #include <QGuiApplication>
+#include <QPainter>
+#include <QPainterPath>
 
 using namespace vx;
 
@@ -419,6 +422,55 @@ VX_TEST(layer_opacity_and_blending)
     d.scenes[0].layers.insert(d.scenes[0].layers.begin(), top);
     img = Renderer::renderFrame(d, d.scenes[0], 0, 1.0, false);
     CHECK(std::abs(qRed(img.pixel(5, 5)) - 128) <= 1);
+}
+
+VX_TEST(stroke_outlines_match_the_pen)
+{
+    // Strokes are filled from their outlines (cached per chain); the result
+    // matches QPainter stroking the same path.
+    for (const CapStyle cap : {CapStyle::Round, CapStyle::Square, CapStyle::None}) {
+        StrokeStyle st;
+        st.width = 9;
+        st.cap = cap;
+        st.join = cap == CapStyle::Square ? JoinStyle::Miter : JoinStyle::Round;
+        st.paint = FillStyle::solid(Color(20, 40, 200));
+        const std::vector<Cubic> chain = {Cubic{{10, 10}, {60, -20}, {90, 80}, {120, 30}}, Cubic::line({120, 30}, {40, 70})};
+        const ShapeGraph g = graphFromPaths({chain}, st);
+        for (const double scale : {0.7, 2.5}) {
+            const Affine m = Affine::scale(scale) * Affine::translate(8, 30);
+            const QSize size(int(140 * scale), int(120 * scale));
+            const auto rd = g.renderDataPtr();
+            QImage once = blank(size.width(), size.height(), 0xffffffff);
+            QImage cached = blank(size.width(), size.height(), 0xffffffff);
+            QImage pen = blank(size.width(), size.height(), 0xffffffff);
+            Renderer::renderShape(once, rd, m, {}, once.rect());
+            Renderer::renderShape(cached, rd, m, {}, cached.rect()); // outlines from the cache
+            CHECK(cached == once);
+            {
+                QPainter p(&pen);
+                p.setRenderHint(QPainter::Antialiasing);
+                p.setTransform(toQTransform(m));
+                QPen qpen(QColor(20, 40, 200), st.width);
+                qpen.setCapStyle(cap == CapStyle::Round ? Qt::RoundCap : cap == CapStyle::Square ? Qt::SquareCap : Qt::FlatCap);
+                qpen.setJoinStyle(st.join == JoinStyle::Miter ? Qt::MiterJoin : Qt::RoundJoin);
+                qpen.setMiterLimit(st.miterLimit);
+                p.setPen(qpen);
+                QPainterPath path;
+                appendChain(path, chain, false);
+                p.drawPath(path);
+            }
+            double sum = 0;
+            int n = 0;
+            for (int y = 0; y < size.height(); ++y)
+                for (int x = 0; x < size.width(); ++x) {
+                    const QRgb a = once.pixel(x, y), b = pen.pixel(x, y);
+                    sum += std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b));
+                    ++n;
+                }
+            std::printf("  cap %d scale %.1f: mean difference %.3f\n", int(cap), scale, sum / (3.0 * n));
+            CHECK(sum / (3.0 * n) < 0.6);
+        }
+    }
 }
 
 VX_TEST(banded_render_matches_single_pass)

@@ -37,6 +37,10 @@ struct ArrInput {
     int labelLeft = 0;   ///< label layers: value on the left of the curve
     int labelRight = 0;  ///< label layers: value on the right of the curve
     int tag = -1;        ///< free user data, e.g. index of the originating edge
+    /// Inputs of one group (>= 0) are known not to cross each other (the
+    /// edges of a planar graph meet at their end points only), so they are
+    /// not intersected pairwise.
+    int group = -1;
 };
 
 struct ArrEdgeSource {

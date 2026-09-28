@@ -667,7 +667,11 @@ void Segmented::addSegment(const QString& text, const QString& icon, const QStri
 void Segmented::setCurrent(int i)
 {
     if (i < 0 || i >= int(m_segs.size())) return;
-    if (i == m_current && m_anim->state() != QAbstractAnimation::Running) {
+    // A control that isn't on screen yet (a panel being rebuilt) starts at
+    // its value; only visible changes slide.
+    if ((i == m_current && m_anim->state() != QAbstractAnimation::Running) || !isVisible()) {
+        m_anim->stop();
+        m_current = i;
         m_pos = i;
         update();
         return;

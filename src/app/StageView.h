@@ -77,6 +77,8 @@ public:
 signals:
     void zoomChanged(double zoom);
     void pointerMoved(double x, double y);
+    /// Right-click on the stage, after selecting what is under the pointer.
+    void contextMenuRequested(const QPoint& globalPos);
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -85,6 +87,7 @@ protected:
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
     void mouseDoubleClickEvent(QMouseEvent*) override;
+    void contextMenuEvent(QContextMenuEvent*) override;
     void tabletEvent(QTabletEvent*) override;
     void wheelEvent(QWheelEvent*) override;
     void keyPressEvent(QKeyEvent*) override;

@@ -56,6 +56,9 @@ protected:
     QPointF toWidget(Vec2 p) const;
     double unitsPerPixel() const;
     void update() const;
+    /// Repaints only part of the stage (widget coordinates): what a stroke
+    /// or a brush cursor changed.
+    void update(const QRectF& widgetRect) const;
     Editor* ed;
     StageView* view;
 };

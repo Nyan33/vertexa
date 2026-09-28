@@ -6,7 +6,13 @@
 #include "render/QtConvert.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
+#include <QDesktopServices>
+#include <QFileInfo>
+#include <QPlainTextEdit>
+#include <QUrl>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QGridLayout>
@@ -472,6 +478,100 @@ HotkeysDialog::HotkeysDialog(const QList<QAction*>& actions, QWidget* parent) : 
     connect(close, &QDialogButtonBox::rejected, this, &QDialog::accept);
     lay->addWidget(close);
     resize(520, 640);
+}
+
+// --- CrashDialog --------------------------------------------------------------------------
+
+QUrl CrashDialog::issueUrl(const QString& report, const QString& reportPath)
+{
+    QString body = tr("**What I was doing:**\n\n\n**Crash report** (the full file is `%1` in *Help ▸ Logs and Crash Reports*; "
+                      "attach it if you can):\n\n```\n")
+                       .arg(QFileInfo(reportPath).fileName());
+    // A URL has room for the head of the report: the system, the crash and the stack.
+    body += report.left(3500);
+    body += "\n```\n";
+    const QString title = "Crash: " + crash::reportSummary(report);
+    QUrl url("https://github.com/Nyan33/vertexa/issues/new");
+    url.setQuery("title=" + QString::fromLatin1(QUrl::toPercentEncoding(title)) +
+                     "&body=" + QString::fromLatin1(QUrl::toPercentEncoding(body)),
+                 QUrl::StrictMode);
+    return url;
+}
+
+CrashDialog::CrashDialog(const crash::Session& s, QWidget* parent) : QDialog(parent)
+{
+    setWindowTitle(tr("Vertexa closed unexpectedly"));
+    auto* lay = new QVBoxLayout(this);
+    lay->setContentsMargins(20, 16, 20, 16);
+    lay->setSpacing(12);
+    lay->addWidget(new SectionTitle(tr("Vertexa closed unexpectedly"), this));
+    const QString report = s.report.isEmpty() ? QString() : crash::readReport(s.report);
+    auto* intro = new QLabel(this);
+    intro->setWordWrap(true);
+    intro->setText(report.isEmpty()
+                       ? tr("The last session did not end normally: the app was stopped by the system or stopped responding.")
+                       : tr("The last session crashed (%1). A report was saved: sending it helps to find and fix the cause. "
+                            "It holds the version, the system, the recent actions and the program's call stack.")
+                             .arg(crash::reportSummary(report).toHtmlEscaped()));
+    lay->addWidget(intro);
+    if (!s.recovery.isEmpty()) {
+        const QString name = s.originalPath.isEmpty() ? tr("an untitled document") : QFileInfo(s.originalPath).fileName();
+        auto* rec = new QLabel(tr("<b>Unsaved work of %1 was kept.</b> Restore it to go on; it opens as an unsaved copy.")
+                                   .arg(name.toHtmlEscaped()),
+                               this);
+        rec->setWordWrap(true);
+        lay->addWidget(rec);
+    }
+    if (!report.isEmpty()) {
+        auto* view = new QPlainTextEdit(this);
+        view->setReadOnly(true);
+        view->setLineWrapMode(QPlainTextEdit::NoWrap);
+        QFont mono("monospace");
+        mono.setStyleHint(QFont::TypeWriter);
+        mono.setPointSizeF(9);
+        view->setFont(mono);
+        view->setPlainText(report);
+        view->setMinimumSize(640, 260);
+        lay->addWidget(view, 1);
+    }
+    auto* row = new QHBoxLayout();
+    row->setSpacing(8);
+    auto button = [&](const QString& text) {
+        auto* b = new QPushButton(text, this);
+        b->setAutoDefault(false);
+        row->addWidget(b);
+        return b;
+    };
+    if (!report.isEmpty()) {
+        QPushButton* copy = button(tr("Copy Report"));
+        connect(copy, &QPushButton::clicked, this, [copy, report]() {
+            QApplication::clipboard()->setText(report);
+            copy->setText(tr("Copied"));
+        });
+        connect(button(tr("Report on GitHub…")), &QPushButton::clicked, this,
+                [report, path = s.report]() { QDesktopServices::openUrl(issueUrl(report, path)); });
+    }
+    connect(button(tr("Open Folder")), &QPushButton::clicked, this,
+            []() { QDesktopServices::openUrl(QUrl::fromLocalFile(crash::reportsDir())); });
+    row->addStretch(1);
+    if (!s.recovery.isEmpty()) {
+        connect(button(tr("Don't Restore")), &QPushButton::clicked, this, [this]() {
+            m_choice = Choice::Discard;
+            reject();
+        });
+        QPushButton* restore = button(tr("Restore Unsaved Work"));
+        restore->setDefault(true);
+        restore->setProperty("accent", true);
+        connect(restore, &QPushButton::clicked, this, [this]() {
+            m_choice = Choice::Restore;
+            accept();
+        });
+    } else {
+        QPushButton* close = button(tr("Close"));
+        close->setDefault(true);
+        connect(close, &QPushButton::clicked, this, &QDialog::reject);
+    }
+    lay->addLayout(row);
 }
 
 } // namespace vx::app

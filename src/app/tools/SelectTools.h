@@ -24,6 +24,17 @@ StageHit hitStage(const Editor* ed, Vec2 pos, double tol);
 bool hitElement(const Document& d, const Element& e, Vec2 p, double tol, int localFrame = 0, int depth = 0);
 /// Bounds of an element in its own coordinate space.
 Rect localBoundsOf(const Document& d, const Element& e, int localFrame = 0);
+/// Whether `p` (with the shape hit `h` on `layer`) is on the selected part of
+/// a merge shape.
+bool pickHit(const Editor* ed, Vec2 p, int layer, const ShapeHit& h);
+/// Makes sure what is under `p` is selected (right-click): keeps the
+/// selection when `p` is on it, otherwise selects the element or the
+/// drawing (fill and outline) there. False on empty space.
+bool selectUnder(Editor* ed, Vec2 p, double tol);
+/// Selects what a marquee (timeline space) covers: the elements it touches,
+/// whole merge shapes inside it, the part of the current layer's merge
+/// shape it cuts. `add` keeps the current selection (Shift).
+void marqueeSelect(Editor* ed, const Rect& r, bool add, double unitsPerPixel);
 
 class SelectionTool : public Tool {
 public:
@@ -105,10 +116,11 @@ public:
     void move(const ToolEvent& e) override;
     void release(const ToolEvent& e) override;
     void hover(const ToolEvent& e) override;
+    void doubleClick(const ToolEvent& e) override;
     void paint(QPainter& p) override;
     void cancel() override;
     QCursor cursor() const override;
-    bool busy() const override { return m_handle != Handle::None; }
+    bool busy() const override { return m_handle != Handle::None || m_marquee; }
 
 private:
     enum class Handle { None, Move, Pivot, Rotate, TL, T, TR, R, BR, B, BL, L, SkewT, SkewB, SkewL, SkewR };
@@ -116,19 +128,27 @@ private:
         bool valid = false;
         Affine toTimeline;
         Rect local;
-        Vec2 pivot; ///< timeline space
+        Vec2 pivot;          ///< timeline space
+        bool ownPivot = false; ///< one symbol, group or drawing object: the pivot is stored in it
     };
     Box computeBox() const;
     Handle handleAt(QPointF w, const Box& b) const;
     Affine currentTransform(Vec2 pos, Qt::KeyboardModifiers mods) const;
     void preview(const Affine& t);
+    /// Selects what a click hits, as the Selection tool does (a drawing
+    /// with its outline). False on empty space.
+    bool pick(const ToolEvent& e);
+    /// The dragged transformation point, snapped to the box centre and handles.
+    Vec2 snappedPivot(Vec2 p) const;
+    void setPivot(Vec2 p);
 
     Handle m_handle = Handle::None;
     Handle m_hoverHandle = Handle::None;
     Box m_box;
-    Vec2 m_start;
+    Vec2 m_start, m_cur;
     Affine m_current;
     Vec2 m_pivotDrag;
+    bool m_marquee = false;
 };
 
 class LassoTool : public Tool {

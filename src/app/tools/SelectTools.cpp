@@ -143,6 +143,16 @@ ShapeGraph moveVertexRaw(const ShapeGraph& g, Vec2 v, Vec2 target, double tol)
     return h;
 }
 
+void paintMarquee(QPainter& p, QPointF a, QPointF b)
+{
+    const ui::Palette& pal = ui::Theme::p();
+    p.save();
+    p.setPen(QPen(pal.selection, 1.0, Qt::DashLine));
+    p.setBrush(ui::withAlpha(pal.selection, 24));
+    p.drawRect(QRectF(a, b).normalized());
+    p.restore();
+}
+
 // Replaces the shape element (merge shape or drawing object) in a doc copy.
 bool replaceShape(Editor* ed, Document& d, int layer, int element, ShapeGraph g)
 {
@@ -165,6 +175,44 @@ bool replaceShape(Editor* ed, Document& d, int layer, int element, ShapeGraph g)
 
 } // namespace
 
+void marqueeSelect(Editor* ed, const Rect& r, bool add, double unitsPerPixel)
+{
+    if (r.width() < unitsPerPixel * 2 && r.height() < unitsPerPixel * 2) return;
+    const Region region = Region::rect(r);
+    std::vector<ElementRef> sel = add ? ed->selection() : std::vector<ElementRef>{};
+    ShapePick pick;
+    const Timeline& tl = ed->timeline();
+    for (int li = 0; li < int(tl.layers.size()); ++li) {
+        const Layer& l = tl.layers[li];
+        if (!l.visible || l.locked || l.type == LayerType::Folder) continue;
+        const Keyframe* k = l.keyAt(ed->frame());
+        if (!k) continue;
+        for (int i = 0; i < int(k->elements.size()); ++i) {
+            const ElementPtr& el = k->elements[i];
+            const Rect b = elementBounds(ed->doc(), *el);
+            if (!b.intersects(r)) continue;
+            if (const ShapeElement* s = asShape(el); s && !s->isObject && i == 0) {
+                if (r.contains(b)) {
+                    sel.push_back({l.id, 0});
+                } else if (!pick.valid() || li == ed->layerIndex()) {
+                    ShapePick p;
+                    p.layerId = l.id;
+                    p.graph = s->graph;
+                    p.region = region;
+                    ShapeGraph rest, lifted;
+                    cutByRegion(*s->graph, region, rest, lifted);
+                    if (!lifted.isEmpty()) pick = p;
+                }
+                continue;
+            }
+            const ElementRef ref{l.id, i};
+            if (std::find(sel.begin(), sel.end(), ref) == sel.end()) sel.push_back(ref);
+        }
+    }
+    ed->setShapePick(pick);
+    ed->setSelection(sel);
+}
+
 // --- SelectionTool --------------------------------------------------------------------
 
 Vec2 SelectionTool::constrained(Vec2 d, Qt::KeyboardModifiers mods) const
@@ -173,7 +221,7 @@ Vec2 SelectionTool::constrained(Vec2 d, Qt::KeyboardModifiers mods) const
     return std::abs(d.x) >= std::abs(d.y) ? Vec2{d.x, 0} : Vec2{0, d.y};
 }
 
-bool SelectionTool::onPick(Vec2 p, int layer, const ShapeHit& h) const
+bool pickHit(const Editor* ed, Vec2 p, int layer, const ShapeHit& h)
 {
     const ShapePick& pick = ed->shapePick();
     if (!pick.valid()) return false;
@@ -184,6 +232,34 @@ bool SelectionTool::onPick(Vec2 p, int layer, const ShapeHit& h) const
     if (h.kind == ShapeHit::Kind::Stroke) return pick.sel.hasEdge(h.arrEdge);
     return false;
 }
+
+bool selectUnder(Editor* ed, Vec2 p, double tol)
+{
+    const StageHit hit = hitStage(ed, p, tol);
+    if (hit.kind == StageHit::Kind::None) return false;
+    const Timeline& tl = ed->timeline();
+    const ElementRef ref{tl.layers[hit.layer].id, hit.index};
+    const auto& sel = ed->selection();
+    if (std::find(sel.begin(), sel.end(), ref) != sel.end()) return true;
+    if (hit.kind == StageHit::Kind::Shape && pickHit(ed, p, hit.layer, hit.shape)) return true;
+    ed->setLayerIndex(hit.layer);
+    if (hit.kind == StageHit::Kind::Element) {
+        ed->setShapePick({});
+        ed->setSelection({ref});
+        return true;
+    }
+    const ShapeGraphPtr g = ed->mergeShape(hit.layer);
+    if (!g) return false;
+    ShapePick pick;
+    pick.layerId = ref.layerId;
+    pick.graph = g;
+    pick.sel = selectConnected(*g, hit.shape);
+    ed->setSelection({});
+    ed->setShapePick(pick);
+    return true;
+}
+
+bool SelectionTool::onPick(Vec2 p, int layer, const ShapeHit& h) const { return pickHit(ed, p, layer, h); }
 
 std::vector<std::pair<Vec2, SelectionTool::HintRef>> SelectionTool::visibleHints() const
 {
@@ -379,42 +455,8 @@ void SelectionTool::release(const ToolEvent& e)
     const Vec2 delta = constrained(m_cur - m_start, e.mods);
     switch (mode) {
     case Mode::Marquee: {
-        const Rect r = Rect::fromPoints(m_start, m_cur);
         update();
-        if (r.width() < unitsPerPixel() * 2 && r.height() < unitsPerPixel() * 2) break;
-        const Region region = Region::rect(r);
-        std::vector<ElementRef> sel = (e.mods & Qt::ShiftModifier) ? ed->selection() : std::vector<ElementRef>{};
-        ShapePick pick;
-        const Timeline& tl = ed->timeline();
-        for (int li = 0; li < int(tl.layers.size()); ++li) {
-            const Layer& l = tl.layers[li];
-            if (!l.visible || l.locked || l.type == LayerType::Folder) continue;
-            const Keyframe* k = l.keyAt(ed->frame());
-            if (!k) continue;
-            for (int i = 0; i < int(k->elements.size()); ++i) {
-                const ElementPtr& el = k->elements[i];
-                const Rect b = elementBounds(ed->doc(), *el);
-                if (!b.intersects(r)) continue;
-                if (const ShapeElement* s = asShape(el); s && !s->isObject && i == 0) {
-                    if (r.contains(b)) {
-                        sel.push_back({l.id, 0});
-                    } else if (!pick.valid() || li == ed->layerIndex()) {
-                        ShapePick p;
-                        p.layerId = l.id;
-                        p.graph = s->graph;
-                        p.region = region;
-                        ShapeGraph rest, lifted;
-                        cutByRegion(*s->graph, region, rest, lifted);
-                        if (!lifted.isEmpty()) pick = p;
-                    }
-                    continue;
-                }
-                const ElementRef ref{l.id, i};
-                if (std::find(sel.begin(), sel.end(), ref) == sel.end()) sel.push_back(ref);
-            }
-        }
-        ed->setShapePick(pick);
-        ed->setSelection(sel);
+        marqueeSelect(ed, Rect::fromPoints(m_start, m_cur), e.mods & Qt::ShiftModifier, unitsPerPixel());
         break;
     }
     case Mode::MoveElements: {
@@ -556,14 +598,7 @@ void SelectionTool::cancel()
 void SelectionTool::paint(QPainter& p)
 {
     const ui::Palette& pal = ui::Theme::p();
-    if (m_mode == Mode::Marquee) {
-        p.save();
-        const QRectF r = QRectF(toWidget(m_start), toWidget(m_cur)).normalized();
-        p.setPen(QPen(pal.selection, 1.0, Qt::DashLine));
-        p.setBrush(ui::withAlpha(pal.selection, 24));
-        p.drawRect(r);
-        p.restore();
-    }
+    if (m_mode == Mode::Marquee) paintMarquee(p, toWidget(m_start), toWidget(m_cur));
     // Shape hints (a, b, c ...).
     const auto hints = visibleHints();
     if (!hints.empty()) {
@@ -804,21 +839,18 @@ FreeTransformTool::Box FreeTransformTool::computeBox() const
     if (els.size() == 1 && !ed->shapePick().valid()) {
         const ElementPtr& e = els.front();
         const ShapeElement* s = asShape(e);
-        if (s && !s->isObject) {
-            b.local = s->graph->bounds(true);
-            b.toTimeline = {};
-            b.pivot = b.local.center();
-        } else {
+        if (!s || s->isObject) {
             b.local = localBoundsOf(ed->doc(), *e);
             b.toTimeline = e->matrix;
             b.pivot = e->matrix.map(e->pivot);
+            b.ownPivot = true;
+            b.valid = !b.local.isEmpty();
+            return b;
         }
-        b.valid = !b.local.isEmpty();
-        return b;
     }
     b.local = ed->selectionBounds();
     b.toTimeline = {};
-    b.pivot = b.local.center();
+    b.pivot = ed->selectionPivot().value_or(b.local.center());
     b.valid = !b.local.isEmpty();
     return b;
 }
@@ -832,7 +864,7 @@ FreeTransformTool::Handle FreeTransformTool::handleAt(QPointF w, const Box& b) c
                          {r.x1, r.y1}, {(r.x0 + r.x1) / 2, r.y1}, {r.x0, r.y1}, {r.x0, (r.y0 + r.y1) / 2}};
     const Handle hs[8] = {Handle::TL, Handle::T, Handle::TR, Handle::R, Handle::BR, Handle::B, Handle::BL, Handle::L};
     const QPointF pivot = toQPoint(view->timelineToWidget().map(b.pivot));
-    if (QLineF(pivot, w).length() <= 7) return Handle::Pivot;
+    if (QLineF(pivot, w).length() <= 9) return Handle::Pivot;
     for (int i = 0; i < 8; ++i)
         if (QLineF(toQPoint(toW.map(pts[i])), w).length() <= 6) return hs[i];
     // Rotation zone just outside the corners.
@@ -861,6 +893,11 @@ Affine FreeTransformTool::currentTransform(Vec2 pos, Qt::KeyboardModifiers mods)
     const Vec2 ml = Bi.map(pos), sl = Bi.map(m_start);
     const bool alt = mods & Qt::AltModifier, shift = mods & Qt::ShiftModifier;
     const Vec2 pivotL = Bi.map(b.pivot);
+    // A transformation point moved off the centre is what scaling and
+    // skewing go from (Alt: the opposite side instead). Left in the centre,
+    // the opposite side stays put, as in Animate (Alt: the centre).
+    const double tol = 0.5 * unitsPerPixel() / std::max(1e-9, B.meanScale());
+    const bool fromPivot = (distance(pivotL, r.center()) > tol) != alt;
     auto scaleAbout = [&](Vec2 anchor, Vec2 handle, bool sx, bool sy) {
         double kx = 1, ky = 1;
         if (sx && std::abs(handle.x - anchor.x) > 1e-12) kx = (ml.x - anchor.x) / (handle.x - anchor.x);
@@ -883,26 +920,26 @@ Affine FreeTransformTool::currentTransform(Vec2 pos, Qt::KeyboardModifiers mods)
         if (shift) a = std::round(a / (kPi / 12)) * (kPi / 12);
         return Affine::about(b.pivot, Affine::rotate(a));
     }
-    case Handle::TL: return scaleAbout(alt ? pivotL : Vec2{r.x1, r.y1}, {r.x0, r.y0}, true, true);
-    case Handle::TR: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y1}, {r.x1, r.y0}, true, true);
-    case Handle::BR: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y1}, true, true);
-    case Handle::BL: return scaleAbout(alt ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y1}, true, true);
-    case Handle::T: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y1}, {r.x0, r.y0}, false, true);
-    case Handle::B: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y0}, {r.x0, r.y1}, false, true);
-    case Handle::L: return scaleAbout(alt ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y0}, true, false);
-    case Handle::R: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y0}, true, false);
+    case Handle::TL: return scaleAbout(fromPivot ? pivotL : Vec2{r.x1, r.y1}, {r.x0, r.y0}, true, true);
+    case Handle::TR: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y1}, {r.x1, r.y0}, true, true);
+    case Handle::BR: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y1}, true, true);
+    case Handle::BL: return scaleAbout(fromPivot ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y1}, true, true);
+    case Handle::T: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y1}, {r.x0, r.y0}, false, true);
+    case Handle::B: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y0}, {r.x0, r.y1}, false, true);
+    case Handle::L: return scaleAbout(fromPivot ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y0}, true, false);
+    case Handle::R: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y0}, true, false);
     case Handle::SkewT:
     case Handle::SkewB: {
         const double h = std::max(1e-9, r.height());
         const double k = (ml.x - sl.x) / h * (m_handle == Handle::SkewT ? -1.0 : 1.0);
-        const Vec2 anchor = alt ? pivotL : Vec2{r.x0, m_handle == Handle::SkewT ? r.y1 : r.y0};
+        const Vec2 anchor = fromPivot ? pivotL : Vec2{r.x0, m_handle == Handle::SkewT ? r.y1 : r.y0};
         return B * Affine::about(anchor, Affine(1, 0, k, 1, 0, 0)) * Bi;
     }
     case Handle::SkewL:
     case Handle::SkewR: {
         const double w = std::max(1e-9, r.width());
         const double k = (ml.y - sl.y) / w * (m_handle == Handle::SkewL ? -1.0 : 1.0);
-        const Vec2 anchor = alt ? pivotL : Vec2{m_handle == Handle::SkewL ? r.x1 : r.x0, r.y0};
+        const Vec2 anchor = fromPivot ? pivotL : Vec2{m_handle == Handle::SkewL ? r.x1 : r.x0, r.y0};
         return B * Affine::about(anchor, Affine(1, k, 0, 1, 0, 0)) * Bi;
     }
     default: break;
@@ -942,23 +979,94 @@ void FreeTransformTool::preview(const Affine& t)
     ed->setPreview(std::move(d));
 }
 
+bool FreeTransformTool::pick(const ToolEvent& e)
+{
+    const StageHit hit = hitStage(ed, e.pos, 4.0 * unitsPerPixel());
+    const bool shift = e.mods & Qt::ShiftModifier;
+    const Timeline& tl = ed->timeline();
+    if (hit.kind == StageHit::Kind::Element) {
+        const ElementRef ref{tl.layers[hit.layer].id, hit.index};
+        std::vector<ElementRef> sel = shift ? ed->selection() : std::vector<ElementRef>{};
+        if (const auto it = std::find(sel.begin(), sel.end(), ref); it != sel.end()) sel.erase(it);
+        else sel.push_back(ref);
+        if (!shift) ed->setShapePick({});
+        ed->setSelection(sel);
+    } else if (hit.kind == StageHit::Kind::Shape) {
+        // Only the drawing under the pointer (its fill with the outline),
+        // not everything else drawn on the layer.
+        const ShapeGraphPtr g = ed->mergeShape(hit.layer);
+        if (!g) return false;
+        ShapePick pick;
+        const ShapePick& cur = ed->shapePick();
+        if (shift && cur.valid() && cur.graph == g && !cur.region) pick = cur;
+        else if (!shift) ed->setSelection({});
+        pick.layerId = tl.layers[hit.layer].id;
+        pick.graph = g;
+        pick.region.reset();
+        pick.sel.add(selectConnected(*g, hit.shape));
+        ed->setShapePick(pick);
+    } else {
+        return false;
+    }
+    ed->setLayerIndex(hit.layer);
+    return true;
+}
+
+Vec2 FreeTransformTool::snappedPivot(Vec2 p) const
+{
+    if (!m_box.valid) return p;
+    const Rect& r = m_box.local;
+    const Affine& B = m_box.toTimeline;
+    const double tol = 7.0 * unitsPerPixel();
+    const Vec2 spots[9] = {{(r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2},
+                           {r.x0, r.y0}, {(r.x0 + r.x1) / 2, r.y0}, {r.x1, r.y0}, {r.x1, (r.y0 + r.y1) / 2},
+                           {r.x1, r.y1}, {(r.x0 + r.x1) / 2, r.y1}, {r.x0, r.y1}, {r.x0, (r.y0 + r.y1) / 2}};
+    for (const Vec2& s : spots)
+        if (distance(B.map(s), p) <= tol) return B.map(s);
+    return p;
+}
+
+void FreeTransformTool::setPivot(Vec2 p)
+{
+    const Box b = computeBox();
+    if (!b.valid) return;
+    if (!b.ownPivot) {
+        ed->setSelectionPivot(p);
+        return;
+    }
+    const ElementPtr e = ed->selectedElements().front();
+    const Vec2 local = e->matrix.inverted().map(p);
+    const ElementRef ref = ed->selection().front();
+    ed->edit(QObject::tr("Move Transformation Point"), [&](Document& d) {
+        Timeline& tl = ed->mutableTimeline(d);
+        const int li = tl.layerIndex(ref.layerId);
+        Keyframe* k = ed->selectionKey(d, li);
+        if (!k || ref.index >= int(k->elements.size())) return false;
+        auto c = k->elements[ref.index]->clone();
+        c->pivot = local;
+        k->elements[ref.index] = c;
+        return true;
+    });
+    ed->setSelection({ref});
+}
+
 void FreeTransformTool::press(const ToolEvent& e)
 {
     m_box = computeBox();
     m_handle = handleAt(e.widget, m_box);
-    m_start = e.pos;
+    m_start = m_cur = e.pos;
     m_current = {};
     if (m_handle == Handle::None) {
-        // Click to select like the Selection tool.
-        const StageHit hit = hitStage(ed, e.pos, 4.0 * unitsPerPixel());
-        if (hit.kind == StageHit::Kind::Element) {
-            ed->setShapePick({});
-            ed->setSelection({{ed->timeline().layers[hit.layer].id, hit.index}});
-        } else if (hit.kind == StageHit::Kind::Shape) {
-            ed->setShapePick({});
-            ed->setSelection({{ed->timeline().layers[hit.layer].id, 0}});
-        } else {
-            ed->clearSelection();
+        if (!pick(e)) {
+            // Empty space: a marquee selects several things at once.
+            if (!(e.mods & Qt::ShiftModifier)) ed->clearSelection();
+            m_marquee = true;
+            update();
+            return;
+        }
+        // Shift adds to the selection without dragging it.
+        if (e.mods & Qt::ShiftModifier) {
+            update();
             return;
         }
         m_box = computeBox();
@@ -970,9 +1078,14 @@ void FreeTransformTool::press(const ToolEvent& e)
 
 void FreeTransformTool::move(const ToolEvent& e)
 {
+    m_cur = e.pos;
+    if (m_marquee) {
+        update();
+        return;
+    }
     if (m_handle == Handle::None) return;
     if (m_handle == Handle::Pivot) {
-        m_pivotDrag = e.pos;
+        m_pivotDrag = snappedPivot(e.pos);
         update();
         return;
     }
@@ -983,6 +1096,12 @@ void FreeTransformTool::move(const ToolEvent& e)
 
 void FreeTransformTool::release(const ToolEvent& e)
 {
+    if (m_marquee) {
+        m_marquee = false;
+        marqueeSelect(ed, Rect::fromPoints(m_start, e.pos), e.mods & Qt::ShiftModifier, unitsPerPixel());
+        update();
+        return;
+    }
     const Handle h = m_handle;
     if (h == Handle::None) return;
     // The final transform depends on the handle being dragged: compute it
@@ -990,27 +1109,22 @@ void FreeTransformTool::release(const ToolEvent& e)
     const Affine t = h == Handle::Pivot ? Affine{} : currentTransform(e.pos, e.mods);
     m_handle = Handle::None;
     if (h == Handle::Pivot) {
-        const auto els = ed->selectedElements();
-        if (els.size() == 1) {
-            const Vec2 local = els.front()->matrix.inverted().map(m_pivotDrag);
-            const ElementRef ref = ed->selection().front();
-            ed->edit(QObject::tr("Move Transformation Point"), [&](Document& d) {
-                Timeline& tl = ed->mutableTimeline(d);
-                const int li = tl.layerIndex(ref.layerId);
-                Keyframe* k = ed->selectionKey(d, li);
-                if (!k || ref.index >= int(k->elements.size())) return false;
-                auto c = k->elements[ref.index]->clone();
-                c->pivot = local;
-                k->elements[ref.index] = c;
-                return true;
-            });
-            ed->setSelection({ref});
-        }
+        if (distance(m_pivotDrag, m_box.pivot) > 1e-9) setPivot(m_pivotDrag);
         update();
         return;
     }
     ed->setPreview(std::nullopt);
     if (!(t == Affine{})) ed->transformSelection(t, QObject::tr("Free Transform"));
+    update();
+}
+
+void FreeTransformTool::doubleClick(const ToolEvent& e)
+{
+    // Double-clicking the transformation point puts it back in the centre.
+    const Box b = computeBox();
+    if (!b.valid || handleAt(e.widget, b) != Handle::Pivot) return;
+    m_box = b;
+    setPivot(b.toTimeline.map(b.local.center()));
     update();
 }
 
@@ -1027,6 +1141,8 @@ void FreeTransformTool::cancel()
 {
     if (m_handle != Handle::None) ed->setPreview(std::nullopt);
     m_handle = Handle::None;
+    m_marquee = false;
+    update();
 }
 
 QCursor FreeTransformTool::cursor() const
@@ -1054,6 +1170,7 @@ QCursor FreeTransformTool::cursor() const
 
 void FreeTransformTool::paint(QPainter& p)
 {
+    if (m_marquee) paintMarquee(p, toWidget(m_start), toWidget(m_cur));
     Box b = m_handle != Handle::None ? m_box : computeBox();
     if (!b.valid) return;
     const ui::Palette& pal = ui::Theme::p();
