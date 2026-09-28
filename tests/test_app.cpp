@@ -379,7 +379,14 @@ VX_TEST(frame_changes_and_edits_redo_only_what_changed)
     w.resize(1400, 900);
     w.show();
     ed.setDocument(createDemoDocument(), {});
-    QApplication::processEvents();
+    // Let the layout settle first (the tools panel may go to two columns,
+    // which resizes the stage and starts its layer cache afresh).
+    QSize stageSize;
+    for (int i = 0, stable = 0; i < 100 && stable < 3; ++i) {
+        QApplication::processEvents();
+        stable = w.stage()->size() == stageSize ? stable + 1 : 0;
+        stageSize = w.stage()->size();
+    }
     auto* panel = w.findChild<PropertiesPanel*>();
     CHECK(panel != nullptr);
     if (!panel) return;
@@ -391,6 +398,7 @@ VX_TEST(frame_changes_and_edits_redo_only_what_changed)
         QApplication::processEvents();
     }
     CHECK(panel->widget() == content); // only the Frame section was rebuilt
+    QApplication::processEvents();
     for (int i = 0; i < 6; ++i) {
         w.stage()->invalidate();
         w.stage()->repaint();
@@ -410,6 +418,7 @@ VX_TEST(frame_changes_and_edits_redo_only_what_changed)
     QApplication::processEvents();
     w.stage()->repaint();
     CHECK(panel->widget() == content);
+    CHECK(w.stage()->size() == stageSize);
     CHECK(w.stage()->renderStats().drawn < w.stage()->renderStats().layers);
     // The current layer's opacity is shown in the panel: that rebuilds it.
     ed.setLayerProperty(ed.layerIndex(), [](Layer& l) { l.opacity = 0.4; }, "Opacity");
