@@ -864,7 +864,7 @@ FreeTransformTool::Handle FreeTransformTool::handleAt(QPointF w, const Box& b) c
                          {r.x1, r.y1}, {(r.x0 + r.x1) / 2, r.y1}, {r.x0, r.y1}, {r.x0, (r.y0 + r.y1) / 2}};
     const Handle hs[8] = {Handle::TL, Handle::T, Handle::TR, Handle::R, Handle::BR, Handle::B, Handle::BL, Handle::L};
     const QPointF pivot = toQPoint(view->timelineToWidget().map(b.pivot));
-    if (QLineF(pivot, w).length() <= 7) return Handle::Pivot;
+    if (QLineF(pivot, w).length() <= 9) return Handle::Pivot;
     for (int i = 0; i < 8; ++i)
         if (QLineF(toQPoint(toW.map(pts[i])), w).length() <= 6) return hs[i];
     // Rotation zone just outside the corners.
@@ -893,6 +893,11 @@ Affine FreeTransformTool::currentTransform(Vec2 pos, Qt::KeyboardModifiers mods)
     const Vec2 ml = Bi.map(pos), sl = Bi.map(m_start);
     const bool alt = mods & Qt::AltModifier, shift = mods & Qt::ShiftModifier;
     const Vec2 pivotL = Bi.map(b.pivot);
+    // A transformation point moved off the centre is what scaling and
+    // skewing go from (Alt: the opposite side instead). Left in the centre,
+    // the opposite side stays put, as in Animate (Alt: the centre).
+    const double tol = 0.5 * unitsPerPixel() / std::max(1e-9, B.meanScale());
+    const bool fromPivot = (distance(pivotL, r.center()) > tol) != alt;
     auto scaleAbout = [&](Vec2 anchor, Vec2 handle, bool sx, bool sy) {
         double kx = 1, ky = 1;
         if (sx && std::abs(handle.x - anchor.x) > 1e-12) kx = (ml.x - anchor.x) / (handle.x - anchor.x);
@@ -915,26 +920,26 @@ Affine FreeTransformTool::currentTransform(Vec2 pos, Qt::KeyboardModifiers mods)
         if (shift) a = std::round(a / (kPi / 12)) * (kPi / 12);
         return Affine::about(b.pivot, Affine::rotate(a));
     }
-    case Handle::TL: return scaleAbout(alt ? pivotL : Vec2{r.x1, r.y1}, {r.x0, r.y0}, true, true);
-    case Handle::TR: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y1}, {r.x1, r.y0}, true, true);
-    case Handle::BR: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y1}, true, true);
-    case Handle::BL: return scaleAbout(alt ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y1}, true, true);
-    case Handle::T: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y1}, {r.x0, r.y0}, false, true);
-    case Handle::B: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y0}, {r.x0, r.y1}, false, true);
-    case Handle::L: return scaleAbout(alt ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y0}, true, false);
-    case Handle::R: return scaleAbout(alt ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y0}, true, false);
+    case Handle::TL: return scaleAbout(fromPivot ? pivotL : Vec2{r.x1, r.y1}, {r.x0, r.y0}, true, true);
+    case Handle::TR: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y1}, {r.x1, r.y0}, true, true);
+    case Handle::BR: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y1}, true, true);
+    case Handle::BL: return scaleAbout(fromPivot ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y1}, true, true);
+    case Handle::T: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y1}, {r.x0, r.y0}, false, true);
+    case Handle::B: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y0}, {r.x0, r.y1}, false, true);
+    case Handle::L: return scaleAbout(fromPivot ? pivotL : Vec2{r.x1, r.y0}, {r.x0, r.y0}, true, false);
+    case Handle::R: return scaleAbout(fromPivot ? pivotL : Vec2{r.x0, r.y0}, {r.x1, r.y0}, true, false);
     case Handle::SkewT:
     case Handle::SkewB: {
         const double h = std::max(1e-9, r.height());
         const double k = (ml.x - sl.x) / h * (m_handle == Handle::SkewT ? -1.0 : 1.0);
-        const Vec2 anchor = alt ? pivotL : Vec2{r.x0, m_handle == Handle::SkewT ? r.y1 : r.y0};
+        const Vec2 anchor = fromPivot ? pivotL : Vec2{r.x0, m_handle == Handle::SkewT ? r.y1 : r.y0};
         return B * Affine::about(anchor, Affine(1, 0, k, 1, 0, 0)) * Bi;
     }
     case Handle::SkewL:
     case Handle::SkewR: {
         const double w = std::max(1e-9, r.width());
         const double k = (ml.y - sl.y) / w * (m_handle == Handle::SkewL ? -1.0 : 1.0);
-        const Vec2 anchor = alt ? pivotL : Vec2{m_handle == Handle::SkewL ? r.x1 : r.x0, r.y0};
+        const Vec2 anchor = fromPivot ? pivotL : Vec2{m_handle == Handle::SkewL ? r.x1 : r.x0, r.y0};
         return B * Affine::about(anchor, Affine(1, k, 0, 1, 0, 0)) * Bi;
     }
     default: break;

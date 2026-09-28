@@ -544,6 +544,37 @@ VX_TEST(free_transform_takes_only_what_is_clicked)
     CHECK(b.x0 < 150 && b.x1 > 690);
 }
 
+VX_TEST(free_transform_scales_from_a_moved_pivot)
+{
+    Fixture f;
+    f.drag(ToolId::Rectangle, {{300, 300}, {400, 400}});
+    f.ed.selectAll();
+    f.ed.convertSelectionToSymbol("Box", SymbolType::MovieClip, 4);
+    const Rect b = f.ed.selectionBounds();
+    const double cy = b.center().y;
+    // Left in the centre, the opposite side stays put.
+    f.drag(ToolId::FreeTransform, {{b.x1, cy}, {b.x1 + 20, cy}, {b.x1 + 50, cy}});
+    Rect s = f.ed.selectionBounds();
+    CHECK(std::abs(s.x0 - b.x0) < 1 && std::abs(s.x1 - (b.x1 + 50)) < 1.5);
+    f.ed.undoStack()->undo();
+    f.ed.setSelection({{f.ed.currentLayer()->id, 0}});
+    // Moved, the transformation point is what the object scales from.
+    const double px = b.x0 + b.width() / 4;
+    f.drag(ToolId::FreeTransform, {b.center(), {b.center().x - 10, cy}, {px, cy}});
+    const double k = (b.x1 + 50 - px) / (b.x1 - px);
+    f.drag(ToolId::FreeTransform, {{b.x1, cy}, {b.x1 + 20, cy}, {b.x1 + 50, cy}});
+    s = f.ed.selectionBounds();
+    CHECK(std::abs(s.x0 - (px + (b.x0 - px) * k)) < 1.5 && std::abs(s.x1 - (b.x1 + 50)) < 1.5);
+    // The point stays where it was put.
+    const auto els = f.ed.selectedElements();
+    CHECK(els.size() == 1 && std::abs(els.front()->matrix.map(els.front()->pivot).x - px) < 1e-6);
+    // Alt: from the opposite side again.
+    const Rect before = f.ed.selectionBounds();
+    f.drag(ToolId::FreeTransform, {{before.x1, cy}, {before.x1 + 20, cy}, {before.x1 + 30, cy}}, Qt::AltModifier);
+    s = f.ed.selectionBounds();
+    CHECK(std::abs(s.x0 - before.x0) < 1 && std::abs(s.x1 - (before.x1 + 30)) < 1.5);
+}
+
 VX_TEST(stage_context_menu_selects_what_is_under_the_pointer)
 {
     Fixture f;

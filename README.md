@@ -43,7 +43,9 @@ arrangement that splits curves at their true intersections and labels faces
   a click takes the drawing under the pointer (not the whole layer), a drag in
   empty space selects with a marquee, and the transformation point can be
   dragged for drawings and multiple selections too (it snaps to the centre and
-  the handles; double-click puts it back). Several selected things get a box
+  the handles; double-click puts it back). Rotation turns around it; once it
+  is off the centre, scaling and skewing go from it as well (`Alt` for the
+  opposite side). Several selected things get a box
   around them.
 - **Right-click on the stage** selects what is under the pointer and opens a
   menu: cut / copy / paste, *Convert to Symbol*, *Break Apart*, group,
