@@ -67,6 +67,20 @@ QShader loadShader(const char* name)
 
 quint32 aligned(quint32 v, quint32 a) { return (v + a - 1) / a * a; }
 
+/// Frees an RHI resource once the frame being recorded has been submitted.
+/// Direct3D 11 runs a frame's commands only when the frame ends, and they
+/// point at the native objects: a resource freed during the frame (a pooled
+/// target trimmed at the end of ours) would be used after it is gone.
+/// Outside a frame this deletes at once.
+struct DeleteLater {
+    void operator()(QRhiResource* r) const
+    {
+        if (r) r->deleteLater();
+    }
+};
+template <class T>
+using RhiPtr = std::unique_ptr<T, DeleteLater>;
+
 /// Per-frame space in dynamic buffers (uniforms, transient vertices). Every
 /// draw gets its own slice, so passes recorded earlier in the frame keep
 /// their data; the slices are uploaded before the pass that first needs them.
@@ -120,7 +134,7 @@ public:
 
 private:
     struct Block {
-        std::unique_ptr<QRhiBuffer> buf;
+        RhiPtr<QRhiBuffer> buf;
         std::vector<char> cpu;
         quint32 used = 0, uploaded = 0;
     };
@@ -134,10 +148,13 @@ private:
 /// A multisampled render target resolving into a texture.
 struct Target {
     QSize size;
-    std::unique_ptr<QRhiTexture> tex; ///< resolved pixels (the colour attachment without MSAA)
-    std::unique_ptr<QRhiRenderBuffer> ms;
-    std::unique_ptr<QRhiTextureRenderTarget> rt;
-    std::unique_ptr<QRhiRenderPassDescriptor> rp;
+    uint64_t used = 0;  ///< frame that last asked for it
+    size_t bytes = 0;   ///< memory it holds (colour and multisample buffers)
+    RhiPtr<QRhiTexture> tex; ///< resolved pixels (the colour attachment without MSAA)
+    RhiPtr<QRhiRenderBuffer> ms;
+    std::shared_ptr<QRhiRenderBuffer> ds; ///< shared by the targets of this size
+    RhiPtr<QRhiTextureRenderTarget> rt;
+    RhiPtr<QRhiRenderPassDescriptor> rp;
 };
 using TargetPtr = std::shared_ptr<Target>;
 using TexturePtr = std::shared_ptr<QRhiTexture>;
@@ -175,12 +192,12 @@ struct RhiRenderer::Impl {
     double lastSubmitMs = 0;
 
     QShader vs, fsStencil, fsFill, fsComposite, fsMask, fsCt, fsCopy, fsDisplay;
-    std::unique_ptr<QRhiSampler> sampler;
-    std::unique_ptr<QRhiTexture> dummy;
-    std::unique_ptr<QRhiBuffer> layoutUbo;
-    std::unique_ptr<QRhiShaderResourceBindings> layout;
+    RhiPtr<QRhiSampler> sampler;
+    RhiPtr<QRhiTexture> dummy;
+    RhiPtr<QRhiBuffer> layoutUbo;
+    RhiPtr<QRhiShaderResourceBindings> layout;
     TargetPtr templateTarget;
-    std::unique_ptr<QRhiGraphicsPipeline> pStencil, pCover, pNormal, pAlpha, pErase, pReplace, pMask, pCt, pCopy, pDisplay;
+    RhiPtr<QRhiGraphicsPipeline> pStencil, pCover, pNormal, pAlpha, pErase, pReplace, pMask, pCt, pCopy, pDisplay;
     QVector<quint32> displayFormat;
     int displaySamples = 0;
 
@@ -190,8 +207,11 @@ struct RhiRenderer::Impl {
     Arena ubo{QRhiBuffer::UniformBuffer, 65536};
     Arena vbo{QRhiBuffer::VertexBuffer, 1 << 20};
     quint32 uboStride = 256;
-    std::vector<std::unique_ptr<QRhiTexture>> lutAtlases;
+    std::vector<RhiPtr<QRhiTexture>> lutAtlases;
     int lutRow = 0;
+    uint64_t frameNo = 0;
+    static constexpr uint64_t kTargetFrames = 120;
+    static constexpr size_t kTargetBudget = size_t(512) << 20;
     static constexpr int kLutRows = 64;
     struct SrbKey {
         QRhiBuffer* ubo;
@@ -210,7 +230,9 @@ struct RhiRenderer::Impl {
 
     // Render targets, reused as soon as nothing refers to them any more.
     std::shared_ptr<std::vector<std::unique_ptr<Target>>> freeTargets = std::make_shared<std::vector<std::unique_ptr<Target>>>();
-    std::map<std::pair<int, int>, std::unique_ptr<QRhiRenderBuffer>> depthStencil;
+    // Depth-stencil buffers, shared by the targets of a size and gone with
+    // the last one (a window resized through many sizes leaves none behind).
+    std::map<std::pair<int, int>, std::weak_ptr<QRhiRenderBuffer>> depthStencil;
 
     // Shape geometry kept in GPU buffers while its render data lives.
     struct Part {
@@ -247,7 +269,7 @@ struct RhiRenderer::Impl {
         frame.reset();
         templateTarget.reset();
         freeTargets->clear();
-        for (auto& [key, srb] : srbs) delete srb;
+        for (auto& [key, srb] : srbs) srb->deleteLater();
         srbs.clear();
         geometry.clear();
         ubo.clear();
@@ -329,7 +351,7 @@ struct RhiRenderer::Impl {
                                        const QRhiGraphicsPipeline::StencilOpState* back = nullptr, bool scissor = true)
     {
         using P = QRhiGraphicsPipeline;
-        std::unique_ptr<P> ps(rhi->newGraphicsPipeline());
+        RhiPtr<P> ps(rhi->newGraphicsPipeline());
         ps->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
         QRhiVertexInputLayout input;
         input.setBindings({{2 * sizeof(float)}});
@@ -377,7 +399,7 @@ struct RhiRenderer::Impl {
 
     QRhiShaderResourceBindings* makeSrb(QRhiBuffer* buf, QRhiTexture* t1, QRhiTexture* t2)
     {
-        std::unique_ptr<QRhiShaderResourceBindings> srb(rhi->newShaderResourceBindings());
+        RhiPtr<QRhiShaderResourceBindings> srb(rhi->newShaderResourceBindings());
         const auto stages = QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage;
         srb->setBindings({QRhiShaderResourceBinding::uniformBufferWithDynamicOffset(0, stages, buf, sizeof(Uniforms)),
                           QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, t1, sampler.get()),
@@ -396,23 +418,21 @@ struct RhiRenderer::Impl {
         return srb;
     }
 
-    QRhiRenderBuffer* depthStencilFor(QSize size)
+    std::shared_ptr<QRhiRenderBuffer> depthStencilFor(QSize size)
     {
-        auto& ds = depthStencil[{size.width(), size.height()}];
-        if (!ds) {
-            ds.reset(rhi->newRenderBuffer(QRhiRenderBuffer::DepthStencil, size, samples));
-            if (!ds->create()) {
-                ds.reset();
-                return nullptr;
-            }
-        }
-        return ds.get();
+        auto& slot = depthStencil[{size.width(), size.height()}];
+        if (auto ds = slot.lock()) return ds;
+        std::shared_ptr<QRhiRenderBuffer> ds(rhi->newRenderBuffer(QRhiRenderBuffer::DepthStencil, size, samples), DeleteLater{});
+        if (!ds->create()) return nullptr;
+        slot = ds;
+        return ds;
     }
 
     std::unique_ptr<Target> createTarget(QSize size)
     {
         auto t = std::make_unique<Target>();
         t->size = size;
+        t->bytes = size_t(size.width()) * size_t(size.height()) * 4 * size_t(samples > 1 ? samples + 1 : 1);
         t->tex.reset(rhi->newTexture(QRhiTexture::RGBA8, size, 1, QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
         if (!t->tex->create()) return nullptr;
         QRhiColorAttachment color;
@@ -425,9 +445,9 @@ struct RhiRenderer::Impl {
             color.setTexture(t->tex.get());
         }
         QRhiTextureRenderTargetDescription desc(color);
-        QRhiRenderBuffer* ds = depthStencilFor(size);
-        if (!ds) return nullptr;
-        desc.setDepthStencilBuffer(ds);
+        t->ds = depthStencilFor(size);
+        if (!t->ds) return nullptr;
+        desc.setDepthStencilBuffer(t->ds.get());
         t->rt.reset(rhi->newTextureRenderTarget(desc));
         t->rp.reset(t->rt->newCompatibleRenderPassDescriptor());
         t->rt->setRenderPassDescriptor(t->rp.get());
@@ -450,6 +470,7 @@ struct RhiRenderer::Impl {
                 break;
             }
         if (!t) t = createTarget(size);
+        if (t) t->used = frameNo;
         if (!t) return nullptr;
         std::weak_ptr<std::vector<std::unique_ptr<Target>>> home = freeTargets;
         return TargetPtr(t.release(), [home](Target* p) {
@@ -527,7 +548,7 @@ struct RhiRenderer::Impl {
     {
         const size_t atlas = size_t(lutRow / kLutRows);
         while (lutAtlases.size() <= atlas) {
-            std::unique_ptr<QRhiTexture> t(rhi->newTexture(QRhiTexture::RGBA8, QSize(256, kLutRows)));
+            RhiPtr<QRhiTexture> t(rhi->newTexture(QRhiTexture::RGBA8, QSize(256, kLutRows)));
             if (!t->create()) return {nullptr, 0};
             lutAtlases.push_back(std::move(t));
         }
@@ -612,9 +633,30 @@ struct RhiRenderer::Impl {
         cb->draw(d.vertices);
     }
 
+    /// Spare targets stay for the next frames, which usually ask for the
+    /// same sizes (isolated layers, masks, filtered instances); those not
+    /// asked for in a while go, and the oldest when they hold too much
+    /// memory (a full-size multisampled one is tens of MB). Freed after the
+    /// frame, like everything else.
+    void trimTargets()
+    {
+        auto& pool = *freeTargets;
+        std::sort(pool.begin(), pool.end(), [](const auto& a, const auto& b) { return a->used > b->used; });
+        size_t bytes = 0;
+        size_t keep = 0;
+        for (; keep < pool.size(); ++keep) {
+            const Target& t = *pool[keep];
+            if (frameNo - t.used > kTargetFrames || bytes + t.bytes > kTargetBudget) break;
+            bytes += t.bytes;
+        }
+        pool.resize(keep);
+        std::erase_if(depthStencil, [](const auto& entry) { return entry.second.expired(); });
+    }
+
     void beginFrame(QRhiCommandBuffer* c)
     {
         cb = c;
+        ++frameNo;
         ubo.reset();
         vbo.reset();
         lutRow = 0;
@@ -629,9 +671,7 @@ struct RhiRenderer::Impl {
         for (auto& [key, srb] : srbs) srb->deleteLater();
         srbs.clear();
         sweepGeometry();
-        // Keep a few spare targets (a full-size multisampled one is tens of MB).
-        auto& pool = *freeTargets;
-        while (pool.size() > 4) pool.erase(pool.begin());
+        trimTargets();
         cb = nullptr;
     }
 
@@ -714,17 +754,18 @@ public:
         const QRect area = QRect(at, layerSurface.size()).intersected(rect());
         if (area.isEmpty() || opacity <= 0.0 || !valid()) return;
         QRhiTexture* src = nullptr;
+        std::shared_ptr<void> keepSrc;
         if (auto* cpu = dynamic_cast<CpuSurface*>(&layerSurface)) {
             TexturePtr t = m_e.upload(cpu->image());
             if (!t) return;
             src = t.get();
-            m_keep.push_back(t);
+            keepSrc = t;
         } else {
             auto& layer = static_cast<RhiSurface&>(layerSurface);
             if (!layer.valid()) return;
             layer.flush();
             src = layer.texture();
-            m_keep.push_back(layer.target());
+            keepSrc = layer.target();
         }
         const bool simple = mode == BlendMode::Normal || mode == BlendMode::Layer || mode == BlendMode::Alpha || mode == BlendMode::Erase;
         QRhiTexture* dst = nullptr;
@@ -734,6 +775,10 @@ public:
             if (!copy) return;
             dst = copy.get();
         }
+        // Kept after the snapshot, whose pass lets go of what earlier draws
+        // read: the layer's target must not go back to the pool (and be
+        // drawn over by the next layer) before the pass that reads it.
+        m_keep.push_back(std::move(keepSrc));
         Uniforms u = m_e.base(m_size);
         set4(u.src, at.x(), at.y(), layerSurface.size().width(), layerSurface.size().height());
         set4(u.dst, m_size.width(), m_size.height(), int(mode), std::clamp(opacity, 0.0, 1.0));
@@ -961,12 +1006,6 @@ void RhiRenderer::releaseFrame()
 {
     d->frame.reset();
     d->freeTargets->clear();
-    // Depth-stencil buffers of sizes no target uses any more (the template
-    // target keeps its own).
-    for (auto it = d->depthStencil.begin(); it != d->depthStencil.end();) {
-        if (d->templateTarget && it->first == std::make_pair(d->templateTarget->size.width(), d->templateTarget->size.height())) ++it;
-        else it = d->depthStencil.erase(it);
-    }
 }
 
 QImage RhiRenderer::renderImage(QSize size, const DrawFn& draw)
