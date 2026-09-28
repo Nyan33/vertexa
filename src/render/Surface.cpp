@@ -11,7 +11,7 @@ CpuSurface::CpuSurface(QSize size) : m_own(size, QImage::Format_ARGB32_Premultip
 void CpuSurface::drawShape(const std::shared_ptr<const ShapeRenderData>& rd, const Affine& m, const ColorTransform& ct,
                            const QRect& clip)
 {
-    if (rd) Renderer::renderShape(*m_image, *rd, m, ct, clip);
+    Renderer::renderShape(*m_image, rd, m, ct, clip);
 }
 
 void CpuSurface::drawOutline(const ShapeRenderData& rd, const Affine& m, const QColor& color, const QRect& clip)

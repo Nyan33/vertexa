@@ -217,14 +217,19 @@ public:
     ElementPtr shownElement(const ElementRef& r) const;
     /// Bounds of the selection in timeline space.
     Rect selectionBounds() const;
+    /// Transformation point of a selection other than one symbol, group or
+    /// drawing object (those keep their own): moved with the Free Transform
+    /// tool, follows transforms, forgotten when the selection changes.
+    std::optional<Vec2> selectionPivot() const { return m_selectionPivot; }
+    void setSelectionPivot(std::optional<Vec2> p);
     /// The merge shape of a layer at the current frame (may be null).
     ShapeGraphPtr mergeShape(int layerIndex) const;
 
     // --- editing helpers --------------------------------------------------------
-    /// Keyframe to draw into on `layerIndex` at the current frame (creates a
-    /// keyframe past the end of the layer). Returns nullptr with a reason if
-    /// the layer can't be edited.
-    Keyframe* editableKey(Document& d, int layerIndex, QString* why = nullptr) const;
+    /// Keyframe to draw into on `layerIndex` at `frame` (the current frame
+    /// when negative; creates a keyframe past the end of the layer). Returns
+    /// nullptr with a reason if the layer can't be edited.
+    Keyframe* editableKey(Document& d, int layerIndex, QString* why = nullptr, int frame = -1) const;
     /// Keyframe holding the selected elements of a layer at the current frame.
     /// On an in-between frame of a classic tween a keyframe with the tweened
     /// state is inserted first, so changes apply to what is shown.
@@ -353,6 +358,7 @@ private:
     FrameSelection m_frameSel;
     std::vector<ElementRef> m_selection;
     ShapePick m_shapePick;
+    std::optional<Vec2> m_selectionPivot;
     ToolId m_tool = ToolId::Brush;
     ToolSettings m_settings;
     bool m_playing = false;

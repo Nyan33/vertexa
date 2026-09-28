@@ -54,6 +54,8 @@ private:
     void documentSettings();
     void convertToSymbol();
     void toggleEditSymbol();
+    /// Right-click menu of the stage (the selection is already set).
+    void stageContextMenu(const QPoint& globalPos);
 
     Editor* m_ed;
     StageView* m_stage = nullptr;

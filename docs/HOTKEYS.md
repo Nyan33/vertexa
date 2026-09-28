@@ -38,12 +38,15 @@ app with its current key.
 | Selection | double-click a fill or line | select connected fills and lines |
 | Selection | double-click an instance / group | edit in place; double-click empty space goes back |
 | Subselection | `Alt`+drag a handle | break a smooth point into a corner |
-| Free Transform | `Shift` | proportional scale, 15° rotation steps |
+| Free Transform | `Shift` | proportional scale, 15° rotation steps; `Shift`+click adds to the selection |
 | Free Transform | `Alt` | scale around the pivot |
+| Free Transform | drag / double-click the pivot | move the transformation point (snaps to the centre and handles) / put it back |
+| Free Transform | drag in empty space | marquee selection |
 | Pen | `Enter` / `Esc` / `Backspace` | finish / cancel / remove last point |
 | Stage | `Ctrl`+wheel, pinch | zoom at the cursor |
 | Stage | wheel, `Shift`+wheel | scroll vertically / horizontally |
 | Stage | `Esc` | cancel the current drag and deselect |
+| Stage | right-click | select what is under the pointer; menu with cut / copy / paste, Convert to Symbol, Break Apart, group, arrange, transform |
 
 ## Edit
 

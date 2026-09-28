@@ -82,6 +82,7 @@ void Editor::setDocument(Document d, const QString& path)
     m_frameSel = {};
     m_selection.clear();
     m_shapePick = {};
+    m_selectionPivot.reset();
     validateState();
     emit documentChanged();
     emit contextChanged();
@@ -135,6 +136,7 @@ void Editor::restore(const Document& d, const State& s)
     m_layer = s.layer;
     m_selection.clear();
     m_shapePick = {};
+    m_selectionPivot.reset();
     validateState();
     emit documentChanged();
     if (ctxChanged) emit contextChanged();
@@ -400,12 +402,14 @@ void Editor::tick()
 void Editor::setSelection(std::vector<ElementRef> s)
 {
     m_selection = std::move(s);
+    m_selectionPivot.reset();
     emit selectionChanged();
 }
 
 void Editor::setShapePick(ShapePick p)
 {
     m_shapePick = std::move(p);
+    m_selectionPivot.reset();
     emit selectionChanged();
 }
 
@@ -414,6 +418,13 @@ void Editor::clearSelection()
     if (m_selection.empty() && !m_shapePick.valid()) return;
     m_selection.clear();
     m_shapePick = {};
+    m_selectionPivot.reset();
+    emit selectionChanged();
+}
+
+void Editor::setSelectionPivot(std::optional<Vec2> p)
+{
+    m_selectionPivot = p;
     emit selectionChanged();
 }
 
@@ -498,13 +509,14 @@ bool Editor::canEdit(int layerIndex, QString* why) const
     return true;
 }
 
-Keyframe* Editor::editableKey(Document& d, int layerIndex, QString* why) const
+Keyframe* Editor::editableKey(Document& d, int layerIndex, QString* why, int frame) const
 {
     if (!canEdit(layerIndex, why)) return nullptr;
+    if (frame < 0) frame = m_frame;
     Timeline& tl = mutableTimeline(d);
     Layer& l = tl.layers[layerIndex];
-    if (m_frame >= l.length()) vx::insertKeyframe(d, tl, layerIndex, m_frame, true);
-    return tl.layers[layerIndex].keyAt(m_frame);
+    if (frame >= l.length()) vx::insertKeyframe(d, tl, layerIndex, frame, true);
+    return tl.layers[layerIndex].keyAt(frame);
 }
 
 Keyframe* Editor::selectionKey(Document& d, int layerIndex) const

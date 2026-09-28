@@ -8,14 +8,74 @@
 #include "core/VectorBrush.h"
 #include "geom/Smooth.h"
 
+#include <QColor>
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPainterPath>
 
 #include <deque>
+#include <functional>
 #include <memory>
 
 namespace vx::app {
+
+/// Finished strokes whose shapes are built (and merged) on a worker thread,
+/// then committed on the GUI thread in the order they were drawn: letting
+/// go of the mouse never waits for the geometry.
+class StrokeQueue {
+public:
+    struct Task {
+        std::function<void()> start;  ///< GUI thread, when the task's turn comes
+        std::function<void()> work;   ///< worker thread
+        std::function<void()> commit; ///< GUI thread, afterwards
+    };
+    StrokeQueue() = default;
+    StrokeQueue(const StrokeQueue&) = delete;
+    StrokeQueue& operator=(const StrokeQueue&) = delete;
+    ~StrokeQueue() { *m_alive = false; }
+    void push(Task task);
+    bool pending() const { return !m_tasks.empty(); }
+
+private:
+    void next();
+    void done();
+    std::deque<Task> m_tasks;
+    bool m_running = false;
+    std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
+};
+
+/// Ink of the stroke being drawn, painted piece by piece into an image of
+/// the view, so a new sample costs only its own piece. The colour's alpha
+/// applies to the stroke as a whole (overlapping pieces don't darken).
+/// Finished strokes stay shown until they are committed.
+class Ink {
+public:
+    void begin(const StageView* view, const QColor& color);
+    /// Paints a piece (timeline space); returns the widget rectangle it touched.
+    QRectF fill(const QPainterPath& piece);
+    QRectF line(Vec2 a, Vec2 b, double widthPx);
+    /// The stroke ends: shown until dropOldest() (a committed stroke).
+    void end();
+    void dropOldest();
+    void cancel();
+    void paint(QPainter& p) const;
+    bool drawing() const { return m_active.has_value(); }
+
+private:
+    struct Sheet {
+        QImage image;
+        qreal opacity = 1.0;
+        Affine xf;  ///< timeline -> image pixels
+        QRect used; ///< image pixels painted
+    };
+    QImage takeImage(QSize px, qreal dpr);
+    void recycle(Sheet& s);
+    const StageView* m_view = nullptr;
+    QColor m_color;
+    std::optional<Sheet> m_active;
+    std::deque<Sheet> m_pending;
+    std::vector<QImage> m_free;
+};
 
 /// Shared input handling for freehand tools: stabiliser + raw samples.
 class FreehandTool : public Tool {
@@ -30,6 +90,9 @@ protected:
     std::vector<InputSample> addSample(const ToolEvent& e);
     std::vector<InputSample> endStroke(double smoothing);
     static InputSample toSample(const ToolEvent& e);
+    /// Moves the hover point; returns the widget area a cursor of
+    /// `diameterPx` covered before and covers now.
+    QRectF moveCursor(Vec2 pos, double diameterPx);
 
     bool m_active = false;
     Stabilizer m_stab;
@@ -47,12 +110,16 @@ public:
     void release(const ToolEvent& e) override;
     void hover(const ToolEvent& e) override;
     void paint(QPainter& p) override;
+    void cancel() override;
     QCursor cursor() const override;
+    bool hasPendingWork() const override { return m_queue.pending(); }
 
 private:
     std::vector<BrushPoint> brushPoints(const std::vector<InputSample>& pts) const;
-    void rebuildPreview();
-    QPainterPath m_preview; ///< timeline space
+    /// Inks the samples from `from` on; returns the widget area touched.
+    QRectF inkFrom(size_t from);
+    Ink m_ink;
+    StrokeQueue m_queue;
     std::optional<Region> m_insideMask;
     bool m_insideEmpty = false;
     int m_layer = -1;
@@ -67,12 +134,16 @@ public:
     void release(const ToolEvent& e) override;
     void hover(const ToolEvent& e) override;
     void paint(QPainter& p) override;
+    void cancel() override;
     QCursor cursor() const override;
+    bool hasPendingWork() const override { return m_queue.pending(); }
 
 private:
     std::vector<BrushPoint> brushPoints(const std::vector<InputSample>& pts) const;
+    QRectF inkFrom(size_t from);
     void faucet(const ToolEvent& e);
-    QPainterPath m_preview;
+    Ink m_ink;
+    StrokeQueue m_queue;
     std::optional<Region> m_mask;
     int m_layer = -1;
 };
@@ -85,10 +156,14 @@ public:
     void move(const ToolEvent& e) override;
     void release(const ToolEvent& e) override;
     void paint(QPainter& p) override;
+    void cancel() override;
     QCursor cursor() const override;
+    bool hasPendingWork() const override { return m_queue.pending(); }
 
 private:
-    std::vector<Cubic> buildChain(std::vector<Vec2> pts, bool& closed) const;
+    QRectF inkFrom(size_t from);
+    Ink m_ink;
+    StrokeQueue m_queue;
     int m_layer = -1;
 };
 

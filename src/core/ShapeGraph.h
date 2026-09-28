@@ -87,6 +87,13 @@ public:
     /// Region covered by a given fill id (or all fills when id == 0).
     Region fillRegion(int fillId = 0) const;
 
+    /// Marks the edges as a planar graph (they meet at their end points only),
+    /// as shape operations emit them: merging into the graph then does not
+    /// intersect them with each other. Any later change to the edges drops
+    /// the mark.
+    void markPlanar() { m_planar = edgesHash(); }
+    bool isPlanar() const { return m_planar != 0 && m_planar == edgesHash(); }
+
     /// Must be called after editing edges/styles of a graph whose caches may
     /// already have been built. Copies never inherit caches.
     void invalidate() const
@@ -114,6 +121,8 @@ private:
         }
     };
     mutable Cache m_cache;
+    uint64_t edgesHash() const;
+    uint64_t m_planar = 0; ///< edgesHash() when marked planar
 };
 
 using ShapeGraphPtr = std::shared_ptr<const ShapeGraph>;

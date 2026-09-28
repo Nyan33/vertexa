@@ -107,11 +107,13 @@ Paint::Paint(const FillStyle& f, const Affine& toDevice)
     }
 }
 
-int scaleBucket(double scale) { return int(std::floor(std::log2(scale) * 2.0)); }
+int scaleBucket(double scale) { return int(std::floor(std::log2(std::clamp(scale, 1e-6, 1e6)) * 2.0)); }
+
+double bucketScale(int bucket) { return std::exp2((bucket + 1) / 2.0); }
 
 FlatShape flattenShape(const ShapeRenderData& rd, int bucket)
 {
-    const double bucketScale = std::exp2((bucket + 1) / 2.0);
+    const double bucketScale = gpu::bucketScale(bucket);
     const double tol = 0.2 / bucketScale;
     FlatShape out;
     std::vector<Vec2> pts;
@@ -126,21 +128,31 @@ FlatShape flattenShape(const ShapeRenderData& rd, int bucket)
     }
     for (const auto& sp : rd.strokes) {
         FlatShape::Part part;
-        double width = 1.0;
-        QPainterPathStroker st;
-        setupStroker(st, sp.style, width, part.cosmetic);
-        if (!part.cosmetic) {
-            QPainterPath path;
-            for (size_t i = 0; i < sp.chains.size(); ++i) appendChain(path, sp.chains[i], sp.closed[i]);
-            // Flatten at the bucket's scale, then back to shape space.
-            QList<QPolygonF> polys = st.createStroke(path).toSubpathPolygons(QTransform::fromScale(bucketScale, bucketScale));
-            for (QPolygonF& poly : polys)
-                for (QPointF& p : poly) p /= bucketScale;
-            appendQPolygons(polys, part.tri, part.bounds);
-        }
+        part.cosmetic = isCosmetic(sp.style);
+        if (!part.cosmetic) appendQPolygons(strokeOutline(sp, bucketScale), part.tri, part.bounds);
         out.strokes.push_back(std::move(part));
     }
     return out;
+}
+
+bool isCosmetic(const StrokeStyle& s) { return s.pattern == StrokePattern::Hairline || !s.scaleWithTransform; }
+
+QList<QPolygonF> strokeOutline(const ShapeRenderData::StrokePath& sp, double scale)
+{
+    double width = 1.0;
+    bool cosmetic = false;
+    QPainterPathStroker st;
+    setupStroker(st, sp.style, width, cosmetic);
+    // As QPainter does for a pen under a transform: offset curves accurate
+    // to a quarter of a device pixel.
+    st.setCurveThreshold(0.25 / scale);
+    QPainterPath path;
+    for (size_t i = 0; i < sp.chains.size(); ++i) appendChain(path, sp.chains[i], sp.closed[i]);
+    // Flatten at the device scale, then back to shape space.
+    QList<QPolygonF> polys = st.createStroke(path).toSubpathPolygons(QTransform::fromScale(scale, scale));
+    for (QPolygonF& poly : polys)
+        for (QPointF& p : poly) p /= scale;
+    return polys;
 }
 
 void strokeInDeviceSpace(const ShapeRenderData::StrokePath& sp, const Affine& m, std::vector<float>& tri, Rect& bounds)

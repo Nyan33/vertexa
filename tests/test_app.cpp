@@ -9,6 +9,7 @@
 #include "app/StageView.h"
 #include "app/Theme.h"
 #include "app/panels/PropertiesPanel.h"
+#include "app/panels/ToolsPanel.h"
 #include "core/DocumentOps.h"
 #include "core/Evaluate.h"
 #include "core/VectorBrush.h"
@@ -18,6 +19,7 @@
 #include <QElapsedTimer>
 #include <QMouseEvent>
 #include <QAction>
+#include <QContextMenuEvent>
 #include <QUndoStack>
 
 using namespace vx;
@@ -413,6 +415,208 @@ VX_TEST(frame_changes_and_edits_redo_only_what_changed)
     ed.setLayerProperty(ed.layerIndex(), [](Layer& l) { l.opacity = 0.4; }, "Opacity");
     QApplication::processEvents();
     CHECK(panel->widget() != content);
+}
+
+VX_TEST(classic_tween_of_a_transformed_drawing)
+{
+    // A star drawn on frame 1, the same star moved, turned and scaled on
+    // frame 20: the tween shows one symbol going from one to the other.
+    Fixture f;
+    f.drag(ToolId::PolyStar, {{400, 300}, {450, 350}, {500, 400}});
+    f.ed.setFrame(19);
+    f.ed.insertFrames();
+    f.ed.insertKeyframe(false);
+    CHECK(f.ed.currentLayer()->keys.size() == 2);
+    f.ed.selectAll();
+    f.ed.transformSelection(Affine::translate(200, 50) * Affine::about({400, 300}, Affine::rotate(0.8) * Affine::scale(1.5)), "Move");
+    f.ed.clearSelection();
+    const Rect end = elementBounds(f.ed.doc(), *f.ed.currentLayer()->keys[1].elements.front());
+    FrameSelection s;
+    s.layerFrom = s.layerTo = f.ed.layerIndex();
+    s.frameFrom = 0;
+    s.frameTo = 19;
+    f.ed.setFrameSelection(s);
+    f.ed.createTween(TweenType::Classic);
+    const Layer& l = *f.ed.currentLayer();
+    CHECK(l.keys[0].tween == TweenType::Classic);
+    CHECK(l.keys[1].tween == TweenType::None); // the last keyframe only ends the tween
+    CHECK(tweenAnimates(l, 0));
+    const auto* a = asInstance(l.keys[0].elements.front());
+    const auto* b = asInstance(l.keys[1].elements.front());
+    CHECK(a && b && a->symbolId == b->symbolId);
+    if (!a || !b) return;
+    // The end keyframe looks as before.
+    CHECK(elementBounds(f.ed.doc(), *l.keys[1].elements.front()).center().x > end.center().x - 1);
+    auto centerAt = [&](int frame) {
+        const auto items = evaluateLayer(f.ed.doc(), f.ed.timeline(), f.ed.layerIndex(), frame);
+        return items.empty() ? Vec2{} : items.front().element->matrix.map(items.front().element->pivot);
+    };
+    const Vec2 c0 = centerAt(0), c10 = centerAt(10), c19 = centerAt(19);
+    CHECK(c10.x > c0.x + 50 && c10.x < c19.x - 50);
+    const double s10 = evaluateLayer(f.ed.doc(), f.ed.timeline(), f.ed.layerIndex(), 10).front().element->matrix.meanScale();
+    CHECK(s10 > 1.1 && s10 < 1.45);
+}
+
+VX_TEST(classic_tween_between_different_drawings)
+{
+    // The second keyframe holds another drawing: two symbols, and the tween
+    // still moves the first towards the second (it is swapped at the end).
+    Fixture f;
+    f.drag(ToolId::Rectangle, {{300, 300}, {400, 400}});
+    f.ed.setFrame(9);
+    f.ed.insertKeyframe(true);
+    f.drag(ToolId::Oval, {{700, 300}, {800, 380}});
+    f.ed.setFrame(0);
+    f.ed.createTween(TweenType::Classic);
+    const Layer& l = *f.ed.currentLayer();
+    const auto* a = asInstance(l.keys[0].elements.front());
+    const auto* b = asInstance(l.keys[1].elements.front());
+    CHECK(a && b && a->symbolId != b->symbolId);
+    CHECK(tweenAnimates(l, 0));
+    const auto mid = evaluateLayer(f.ed.doc(), f.ed.timeline(), f.ed.layerIndex(), 5);
+    CHECK(!mid.empty() && elementBounds(f.ed.doc(), *mid.front().element).center().x > 450);
+}
+
+VX_TEST(shape_tween_needs_shapes)
+{
+    Fixture f;
+    f.drag(ToolId::Rectangle, {{300, 300}, {400, 400}});
+    f.ed.setFrame(9);
+    f.ed.insertKeyframe(true);
+    f.drag(ToolId::Oval, {{700, 300}, {800, 380}});
+    f.ed.setFrame(0);
+    f.ed.createTween(TweenType::Shape);
+    CHECK(tweenAnimates(*f.ed.currentLayer(), 0));
+    const auto mid = evaluateLayer(f.ed.doc(), f.ed.timeline(), f.ed.layerIndex(), 5);
+    CHECK(mid.size() == 1 && mid.front().element->type() == ElementType::Morph);
+    // Symbols don't morph: the tween is shown as broken.
+    f.ed.removeTween();
+    f.ed.createTween(TweenType::Classic);
+    f.ed.removeTween();
+    f.ed.createTween(TweenType::Shape);
+    CHECK(!tweenAnimates(*f.ed.currentLayer(), 0));
+}
+
+VX_TEST(free_transform_takes_only_what_is_clicked)
+{
+    Fixture f;
+    f.drag(ToolId::Rectangle, {{200, 200}, {300, 300}});
+    f.drag(ToolId::Rectangle, {{600, 200}, {700, 300}});
+    f.ed.clearSelection();
+    auto squares = [&]() {
+        std::vector<Rect> out;
+        for (const Contour& c : f.ed.mergeShape(f.ed.layerIndex())->fillRegion(0).contours) {
+            Rect b;
+            for (const Cubic& cu : c) b.include(cu.p0);
+            out.push_back(b);
+        }
+        std::sort(out.begin(), out.end(), [](const Rect& a, const Rect& b) { return a.x0 < b.x0; });
+        return out;
+    };
+    // A click selects the square under the pointer, not the whole layer.
+    f.click(ToolId::FreeTransform, {250, 250});
+    CHECK(f.ed.selection().empty() && f.ed.shapePick().valid());
+    Rect b = f.ed.selectionBounds();
+    CHECK(b.x1 < 320);
+    // The transformation point moves (and snaps to the corner)...
+    f.drag(ToolId::FreeTransform, {{250, 250}, {230, 230}, {203, 203}});
+    CHECK(f.ed.selectionPivot().has_value());
+    const Vec2 pivot = f.ed.selectionPivot().value_or(Vec2{});
+    CHECK(distance(pivot, {b.x0, b.y0}) < 1e-6);
+    // ...and the square turns about it: a quarter turn around its top left corner.
+    std::vector<Vec2> path;
+    const Vec2 grab{b.x1 + 8, b.y1 + 8};
+    for (int i = 0; i <= 10; ++i) {
+        const double a = i * (kPi / 2) / 10;
+        const Vec2 d = grab - pivot;
+        path.push_back(pivot + Vec2{d.x * std::cos(a) - d.y * std::sin(a), d.x * std::sin(a) + d.y * std::cos(a)});
+    }
+    f.drag(ToolId::FreeTransform, path);
+    const auto sq = squares();
+    CHECK(sq.size() == 2);
+    if (sq.size() == 2) {
+        CHECK(std::abs(sq[0].x1 - pivot.x) < 1.5 && std::abs(sq[0].y0 - pivot.y) < 1.5);
+        CHECK(std::abs(sq[1].x0 - 600) < 1e-6 && std::abs(sq[1].x1 - 700) < 1e-6); // the other one stays
+    }
+    // A marquee in empty space takes both.
+    f.drag(ToolId::FreeTransform, {{20, 20}, {400, 400}, {900, 500}});
+    b = f.ed.selectionBounds();
+    CHECK(b.x0 < 150 && b.x1 > 690);
+}
+
+VX_TEST(stage_context_menu_selects_what_is_under_the_pointer)
+{
+    Fixture f;
+    f.drag(ToolId::Rectangle, {{200, 200}, {300, 300}});
+    f.drag(ToolId::Rectangle, {{600, 200}, {700, 300}});
+    f.ed.clearSelection();
+    int menus = 0;
+    QObject::connect(&f.view, &StageView::contextMenuRequested, [&](const QPoint&) { ++menus; });
+    auto rightClick = [&](Vec2 p) {
+        const QPointF w = f.w(p);
+        QContextMenuEvent ev(QContextMenuEvent::Mouse, w.toPoint(), f.view.mapToGlobal(w.toPoint()));
+        QApplication::sendEvent(&f.view, &ev);
+    };
+    rightClick({650, 250});
+    CHECK(menus == 1);
+    CHECK(f.ed.shapePick().valid() && f.ed.selectionBounds().x0 > 590);
+    // Convert to Symbol from there takes just that drawing.
+    f.ed.convertSelectionToSymbol("Square", SymbolType::Graphic, 4);
+    const auto& els = f.ed.currentLayer()->keyAt(0)->elements;
+    CHECK(els.size() == 2 && els.back()->type() == ElementType::Instance);
+    CHECK(f.ed.mergeShape(f.ed.layerIndex())->bounds(false).x1 < 320);
+    // On a selected element the selection stays.
+    f.ed.selectAll();
+    const size_t n = f.ed.selection().size();
+    rightClick({650, 250});
+    CHECK(f.ed.selection().size() == n);
+}
+
+VX_TEST(tools_panel_fits_short_screens)
+{
+    Editor ed;
+    ToolsPanel panel(&ed);
+    panel.resize(panel.width(), 1000);
+    panel.show();
+    QApplication::processEvents();
+    CHECK(panel.columns() == 1);
+    panel.resize(panel.width(), 420);
+    QApplication::processEvents();
+    CHECK(panel.columns() == 2);
+    CHECK(panel.width() > 90);
+    // Still too short: the wheel scrolls, and the current tool is kept in view.
+    panel.resize(panel.width(), 200);
+    QApplication::processEvents();
+    ed.setTool(ToolId::Zoom);
+    QApplication::processEvents();
+    CHECK(panel.columns() == 2);
+    panel.resize(panel.width(), 1000);
+    QApplication::processEvents();
+    CHECK(panel.columns() == 1 && panel.width() < 60);
+}
+
+VX_TEST(strokes_commit_in_the_background)
+{
+    Fixture f;
+    f.ed.settings().brushSmoothing = 0;
+    f.ed.settings().brushPressure = false;
+    f.ed.setTool(ToolId::Brush);
+    f.send(QEvent::MouseButtonPress, {300, 300}, Qt::LeftButton);
+    for (int i = 1; i <= 30; ++i) f.send(QEvent::MouseMove, {300.0 + i * 10, 300}, Qt::LeftButton);
+    f.send(QEvent::MouseButtonRelease, {600, 300}, Qt::NoButton);
+    // Moving on right away: the stroke still lands on the frame it was drawn on.
+    f.ed.setFrame(5);
+    while (f.view.hasPendingWork()) QApplication::processEvents(QEventLoop::AllEvents, 5);
+    const Layer& l = *f.ed.currentLayer();
+    CHECK(l.keys.size() == 1 && l.keys[0].start == 0 && !l.keys[0].elements.empty());
+    // One undo step per stroke.
+    f.ed.setFrame(0);
+    f.line(ToolId::Pencil, {300, 400}, {600, 450});
+    ShapeGraphPtr g = f.ed.mergeShape(f.ed.layerIndex());
+    CHECK(g && !g->strokes.empty());
+    f.ed.undoStack()->undo();
+    g = f.ed.mergeShape(f.ed.layerIndex());
+    CHECK(g && g->strokes.empty() && g->fillRegion(0).area() > 1000);
 }
 
 int main(int argc, char** argv)

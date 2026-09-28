@@ -39,7 +39,15 @@ arrangement that splits curves at their true intersections and labels faces
 - **Selection (V)** — click fills and line segments, double-click for connected
   parts, drag an unselected edge to *bend* it, drag a corner to move it, marquee
   and **Lasso (L)** cut shapes. **Subselection (A)** edits points and Bezier
-  handles, **Free Transform (Q)** scales/rotates/skews around a movable pivot.
+  handles, **Free Transform (Q)** scales/rotates/skews around a movable pivot:
+  a click takes the drawing under the pointer (not the whole layer), a drag in
+  empty space selects with a marquee, and the transformation point can be
+  dragged for drawings and multiple selections too (it snaps to the centre and
+  the handles; double-click puts it back). Several selected things get a box
+  around them.
+- **Right-click on the stage** selects what is under the pointer and opens a
+  menu: cut / copy / paste, *Convert to Symbol*, *Break Apart*, group,
+  arrange and transform.
 - **Seam-free rendering** — all fills of a shape are rasterised in one
   exact-coverage pass, so adjacent colours never show hairline gaps.
 - **GPU rendering** — the stage is drawn and shown on the GPU through Qt RHI:
@@ -53,7 +61,15 @@ arrangement that splits curves at their true intersections and labels faces
   `VERTEXA_RHI=vulkan|opengl|metal|d3d11|d3d12` picks the API.
 - **Stays responsive** — layers that do not change are kept as pixels and only
   the layers being animated or edited are drawn again; large frames are
-  rasterised on all cores; brush previews are built on a worker thread.
+  rasterised on all cores; brush previews are built on a worker thread. Brush,
+  Pencil, Eraser and Paint Brush strokes are turned into shapes and merged on
+  a worker thread, so letting go of the mouse never waits; while drawing, only
+  the new piece of the stroke is painted. Merging into a drawing only
+  intersects the new edges with it, and stroke outlines are kept between
+  frames.
+
+**Tools panel.** On short screens the tools go in two columns; if they still
+don't fit, the wheel scrolls them.
 
 **Timeline.** Layers, folders, mask and motion-guide layers, visibility / lock /
 outline toggles, keyframes, blank keyframes, spans, labels, onion skin, drag to
@@ -87,7 +103,11 @@ the Properties panel; the timeline shows them next to the layer name.
 **Animation.**
 - **Classic tweens** with Animate's matrix decomposition, rotation (Auto, CW,
   CCW × n), the classic ease plus 27 preset eases and custom curves, **motion
-  guides** with *orient to path*.
+  guides** with *orient to path*. Drawings are turned into graphic symbols
+  when the tween is created; when the next keyframe holds the same drawing
+  moved, scaled or rotated, both keyframes use one symbol and the tween
+  interpolates exactly that. An instance tweens towards another symbol too
+  (swapped at the keyframe). Tweens with nothing to interpolate are dashed.
 - **Shape tweens** that morph fills, holes, strokes and gradients, with
   *Distributive / Angular* blending and **shape hints** (`Ctrl+Shift+H`).
 

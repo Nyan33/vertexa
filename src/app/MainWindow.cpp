@@ -30,6 +30,7 @@
 #include <QIcon>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
@@ -79,6 +80,7 @@ MainWindow::MainWindow(Editor* editor, QWidget* parent) : QMainWindow(parent), m
         m_coords->setText(QString("X %1   Y %2").arg(x, 0, 'f', 1).arg(y, 0, 'f', 1));
     });
     connect(m_stage, &StageView::zoomChanged, this, [this](double z) { m_zoomLabel->setText(QString("%1%").arg(int(std::round(z * 100)))); });
+    connect(m_stage, &StageView::contextMenuRequested, this, &MainWindow::stageContextMenu);
 
     QSettings s;
     resize(1480, 920);
@@ -773,6 +775,49 @@ void MainWindow::convertToSymbol()
     ConvertToSymbolDialog dlg(QString::fromStdString(m_ed->doc().uniqueSymbolName("Symbol 1")), m_ed->doc().allLibraryFolders(), this);
     if (dlg.exec() == QDialog::Accepted)
         m_ed->convertSelectionToSymbol(dlg.name(), dlg.type(), dlg.registration(), dlg.folder(), dlg.scale9());
+}
+
+void MainWindow::stageContextMenu(const QPoint& globalPos)
+{
+    QMenu menu(this);
+    auto add = [this](QMenu* m, const char* name) {
+        if (QAction* a = m_actions.value(name)) m->addAction(a);
+    };
+    const bool selection = m_ed->hasSelection();
+    const auto els = m_ed->selectedElements();
+    bool instance = false, group = false, whole = false;
+    for (const ElementPtr& e : els) {
+        instance |= e->type() == ElementType::Instance;
+        group |= e->type() == ElementType::Group;
+        const ShapeElement* s = asShape(e);
+        whole |= !s || s->isObject;
+    }
+    if (selection) {
+        for (const char* n : {"cut", "copy"}) add(&menu, n);
+    }
+    for (const char* n : {"paste", "pasteInPlace"}) add(&menu, n);
+    if (selection) {
+        for (const char* n : {"duplicate", "clear"}) add(&menu, n);
+        menu.addSeparator();
+        add(&menu, "convertToSymbol");
+        if (whole) add(&menu, "breakApart");
+        add(&menu, "group");
+        if (group) add(&menu, "ungroup");
+        if (instance && els.size() == 1) add(&menu, "editSymbols");
+        menu.addSeparator();
+        QMenu* transform = menu.addMenu(tr("Transform"));
+        transform->addAction(tr("Free Transform"), this, [this] { m_ed->setTool(ToolId::FreeTransform); });
+        transform->addSeparator();
+        for (const char* n : {"rotateCW", "rotateCCW", "flipH", "flipV"}) add(transform, n);
+        if (!els.empty()) {
+            QMenu* arrange = menu.addMenu(tr("Arrange"));
+            for (const char* n : {"bringToFront", "bringForward", "sendBackward", "sendToBack"}) add(arrange, n);
+        }
+    }
+    menu.addSeparator();
+    add(&menu, "selectAll");
+    if (selection) add(&menu, "deselectAll");
+    menu.exec(globalPos);
 }
 
 void MainWindow::toggleEditSymbol()

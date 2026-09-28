@@ -5,6 +5,7 @@
 #include "Filters.h"
 #include "QtConvert.h"
 #include "Raster.h"
+#include "GpuGeometry.h"
 
 #include <QCoreApplication>
 #include <QPainter>
@@ -16,6 +17,8 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <mutex>
+#include <unordered_map>
 
 namespace vx {
 
@@ -85,6 +88,255 @@ QThreadPool& renderPool()
     return pool;
 }
 
+using Polygons = std::vector<std::vector<Vec2>>;
+using PolygonsPtr = std::shared_ptr<const Polygons>;
+
+/// Stroke outlines of a shape (shape space) for one scale bucket: per
+/// stroke path, the outline of each chain (none for cosmetic strokes).
+struct StrokeOutlines {
+    std::vector<std::vector<PolygonsPtr>> strokes;
+    size_t bytes = 0;
+};
+
+uint64_t mix(uint64_t h, uint64_t v) { return (h ^ v) * 0x100000001b3ull; }
+uint64_t mix(uint64_t h, double d)
+{
+    uint64_t v;
+    std::memcpy(&v, &d, sizeof v);
+    return mix(h, v);
+}
+
+/// Content of a stroke chain as drawn at a scale bucket (the paint aside).
+uint64_t chainKey(const StrokeStyle& s, const std::vector<Cubic>& chain, bool closed, int bucket)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+    h = mix(h, uint64_t(uint32_t(bucket)) << 8 | uint64_t(closed) << 4 | uint64_t(s.cap));
+    h = mix(h, uint64_t(s.join) << 8 | uint64_t(s.pattern));
+    for (double d : {s.width, s.miterLimit, s.dash, s.gap}) h = mix(h, d);
+    for (const Cubic& c : chain)
+        for (const Vec2& p : {c.p0, c.p1, c.p2, c.p3}) h = mix(mix(h, p.x), p.y);
+    return h;
+}
+
+/// Outlines of single chains by content: a shape redrawn after an edit (a
+/// stroke merged into a drawing) reuses those of the chains that did not
+/// change, within a memory budget.
+class ChainCache {
+public:
+    PolygonsPtr get(uint64_t key, const std::function<Polygons()>& build)
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            if (auto it = m_entries.find(key); it != m_entries.end()) {
+                it->second.used = ++m_tick;
+                return it->second.polygons;
+            }
+        }
+        auto polys = std::make_shared<const Polygons>(build());
+        size_t bytes = 64;
+        for (const auto& p : *polys) bytes += p.size() * sizeof(Vec2) + 32;
+        std::lock_guard lock(m_mutex);
+        Entry& e = m_entries[key];
+        m_bytes -= std::min(m_bytes, e.bytes);
+        e = {polys, bytes, ++m_tick};
+        m_bytes += bytes;
+        if (m_bytes > kBudget) {
+            // Least recently used first, down to three quarters.
+            std::vector<std::pair<uint64_t, uint64_t>> byAge;
+            for (const auto& [k, v] : m_entries) byAge.push_back({v.used, k});
+            std::sort(byAge.begin(), byAge.end());
+            for (const auto& [used, k] : byAge) {
+                if (m_bytes <= kBudget * 3 / 4) break;
+                auto it = m_entries.find(k);
+                m_bytes -= std::min(m_bytes, it->second.bytes);
+                m_entries.erase(it);
+            }
+        }
+        return polys;
+    }
+
+private:
+    static constexpr size_t kBudget = size_t(128) << 20;
+    struct Entry {
+        PolygonsPtr polygons;
+        size_t bytes = 0;
+        uint64_t used = 0;
+    };
+    std::mutex m_mutex;
+    std::unordered_map<uint64_t, Entry> m_entries;
+    size_t m_bytes = 0;
+    uint64_t m_tick = 0;
+};
+
+ChainCache& chainCache()
+{
+    static ChainCache cache;
+    return cache;
+}
+
+Polygons chainOutline(const StrokeStyle& style, const std::vector<Cubic>& chain, bool closed, double scale)
+{
+    ShapeRenderData::StrokePath sp;
+    sp.style = style;
+    sp.chains = {chain};
+    sp.closed = {char(closed)};
+    Polygons polys;
+    for (const QPolygonF& poly : gpu::strokeOutline(sp, scale)) {
+        std::vector<Vec2> pts;
+        pts.reserve(size_t(poly.size()));
+        for (const QPointF& p : poly) pts.push_back({p.x(), p.y()});
+        polys.push_back(std::move(pts));
+    }
+    return polys;
+}
+
+StrokeOutlines buildOutlines(const ShapeRenderData& rd, int bucket, bool cached)
+{
+    StrokeOutlines out;
+    const double scale = gpu::bucketScale(bucket);
+    for (const auto& sp : rd.strokes) {
+        std::vector<PolygonsPtr> chains;
+        if (!gpu::isCosmetic(sp.style))
+            for (size_t i = 0; i < sp.chains.size(); ++i) {
+                const bool closed = i < sp.closed.size() && sp.closed[i];
+                auto build = [&]() { return chainOutline(sp.style, sp.chains[i], closed, scale); };
+                chains.push_back(cached ? chainCache().get(chainKey(sp.style, sp.chains[i], closed, bucket), build)
+                                        : std::make_shared<const Polygons>(build()));
+            }
+        out.bytes += chains.size() * sizeof(PolygonsPtr) + 32;
+        out.strokes.push_back(std::move(chains));
+    }
+    return out;
+}
+
+/// Stroking a path is costly, and banded rendering would do it once per
+/// band; filling its outline is not. The outlines of a shape are gathered
+/// once per scale bucket while it lives (weakly referenced, so a reused
+/// address is told apart).
+class OutlineCache {
+public:
+    std::shared_ptr<const StrokeOutlines> get(const std::shared_ptr<const ShapeRenderData>& rd, int bucket)
+    {
+        std::shared_ptr<Slot> slot;
+        {
+            std::lock_guard lock(m_mutex);
+            Entry& e = m_entries[{rd.get(), bucket}];
+            if (!e.slot || e.owner.lock() != rd) {
+                m_bytes -= std::min(m_bytes, e.bytes);
+                e = Entry{rd, std::make_shared<Slot>(), 0, 0};
+            }
+            e.used = ++m_tick;
+            slot = e.slot;
+        }
+        // One thread builds, the others (bands of the same frame) wait.
+        std::lock_guard build(slot->mutex);
+        if (!slot->outlines) {
+            slot->outlines = std::make_shared<const StrokeOutlines>(buildOutlines(*rd, bucket, true));
+            std::lock_guard lock(m_mutex);
+            auto it = m_entries.find({rd.get(), bucket});
+            if (it != m_entries.end() && it->second.slot == slot) {
+                it->second.bytes = slot->outlines->bytes;
+                m_bytes += it->second.bytes;
+                trim();
+            }
+        }
+        return slot->outlines;
+    }
+
+private:
+    static constexpr size_t kBudget = size_t(16) << 20;
+    struct Slot {
+        std::mutex mutex;
+        std::shared_ptr<const StrokeOutlines> outlines;
+    };
+    struct Entry {
+        std::weak_ptr<const ShapeRenderData> owner;
+        std::shared_ptr<Slot> slot;
+        size_t bytes = 0;
+        uint64_t used = 0;
+    };
+    struct Key {
+        const ShapeRenderData* rd;
+        int bucket;
+        bool operator==(const Key&) const = default;
+    };
+    struct KeyHash {
+        size_t operator()(const Key& k) const { return std::hash<const void*>{}(k.rd) ^ (size_t(k.bucket) * 0x9e3779b97f4a7c15ull); }
+    };
+
+    void trim()
+    {
+        if (m_bytes <= kBudget) return;
+        // Shapes that are gone first, then the least recently used.
+        for (auto it = m_entries.begin(); it != m_entries.end();) {
+            if (it->second.owner.expired()) {
+                m_bytes -= std::min(m_bytes, it->second.bytes);
+                it = m_entries.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        while (m_bytes > kBudget * 3 / 4 && !m_entries.empty()) {
+            auto oldest = m_entries.begin();
+            for (auto it = m_entries.begin(); it != m_entries.end(); ++it)
+                if (it->second.used < oldest->second.used) oldest = it;
+            m_bytes -= std::min(m_bytes, oldest->second.bytes);
+            m_entries.erase(oldest);
+        }
+    }
+
+    std::mutex m_mutex;
+    std::unordered_map<Key, Entry, KeyHash> m_entries;
+    size_t m_bytes = 0;
+    uint64_t m_tick = 0;
+};
+
+OutlineCache& outlineCache()
+{
+    static OutlineCache cache;
+    return cache;
+}
+
+/// Fills through the scanline rasteriser, then the strokes in order: their
+/// outlines filled the same way, cosmetic ones (a width on screen) stroked
+/// by QPainter.
+void drawShape(QImage& target, const ShapeRenderData& rd, const StrokeOutlines& outlines, const Affine& m,
+               const ColorTransform& ct, const QRect& clip)
+{
+    if (!rd.fills.empty()) {
+        std::vector<RasterFill> fills;
+        fills.reserve(rd.fills.size());
+        for (const auto& fp : rd.fills)
+            fills.push_back({&fp.contours, ct.isIdentity() ? fp.style : fp.style.withColorTransform(ct), {}});
+        rasterizeFills(target, fills, m, clip);
+    }
+    for (size_t i = 0; i < rd.strokes.size(); ++i) {
+        const auto& sp = rd.strokes[i];
+        if (gpu::isCosmetic(sp.style)) {
+            QPainter p(&target);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setClipRect(clip);
+            p.setTransform(toQTransform(m));
+            p.setBrush(Qt::NoBrush);
+            p.setPen(penFor(sp.style, ct));
+            QPainterPath path;
+            for (size_t k = 0; k < sp.chains.size(); ++k) appendChain(path, sp.chains[k], sp.closed[k]);
+            p.drawPath(path);
+            continue;
+        }
+        if (i >= outlines.strokes.size() || outlines.strokes[i].empty()) continue;
+        RasterFill f;
+        for (const PolygonsPtr& chain : outlines.strokes[i]) f.polygons.push_back(chain.get());
+        f.style = ct.isIdentity() ? sp.style.paint : sp.style.paint.withColorTransform(ct);
+        rasterizeFills(target, {f}, m, clip);
+    }
+}
+
+bool visible(const ShapeRenderData& rd, const Affine& m, const QRect& clip)
+{
+    return !rd.isEmpty() && (rd.bounds.isEmpty() || deviceRect(m.mapRect(rd.bounds)).intersects(clip));
+}
+
 } // namespace
 
 Renderer::Renderer(const Document& doc, RenderOptions opts) : m_doc(doc), m_opts(std::move(opts)) {}
@@ -92,28 +344,21 @@ Renderer::Renderer(const Document& doc, RenderOptions opts) : m_doc(doc), m_opts
 void Renderer::renderShape(QImage& target, const ShapeRenderData& rd, const Affine& m, const ColorTransform& ct,
                            const QRect& clip)
 {
-    if (rd.isEmpty()) return;
-    if (!rd.bounds.isEmpty() && !deviceRect(m.mapRect(rd.bounds)).intersects(clip)) return;
-    if (!rd.fills.empty()) {
-        std::vector<RasterFill> fills;
-        fills.reserve(rd.fills.size());
-        for (const auto& fp : rd.fills)
-            fills.push_back({&fp.contours, ct.isIdentity() ? fp.style : fp.style.withColorTransform(ct)});
-        rasterizeFills(target, fills, m, clip);
+    if (!visible(rd, m, clip)) return;
+    drawShape(target, rd, rd.strokes.empty() ? StrokeOutlines{} : buildOutlines(rd, gpu::scaleBucket(gpu::maxScale(m)), false),
+              m, ct, clip);
+}
+
+void Renderer::renderShape(QImage& target, const std::shared_ptr<const ShapeRenderData>& rd, const Affine& m,
+                           const ColorTransform& ct, const QRect& clip)
+{
+    if (!rd || !visible(*rd, m, clip)) return;
+    if (rd->strokes.empty()) {
+        drawShape(target, *rd, {}, m, ct, clip);
+        return;
     }
-    if (!rd.strokes.empty()) {
-        QPainter p(&target);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setClipRect(clip);
-        p.setTransform(toQTransform(m));
-        p.setBrush(Qt::NoBrush);
-        for (const auto& sp : rd.strokes) {
-            p.setPen(penFor(sp.style, ct));
-            QPainterPath path;
-            for (size_t i = 0; i < sp.chains.size(); ++i) appendChain(path, sp.chains[i], sp.closed[i]);
-            p.drawPath(path);
-        }
-    }
+    const std::shared_ptr<const StrokeOutlines> outlines = outlineCache().get(rd, gpu::scaleBucket(gpu::maxScale(m)));
+    drawShape(target, *rd, *outlines, m, ct, clip);
 }
 
 void Renderer::renderOutline(QImage& target, const ShapeRenderData& rd, const Affine& m, const QColor& color,

@@ -5,6 +5,7 @@
 #include "../Theme.h"
 #include "../Widgets.h"
 
+#include "core/Evaluate.h"
 #include "render/QtConvert.h"
 
 #include <QAction>
@@ -224,8 +225,8 @@ void TimelineView::paintGrid(QPainter& p)
             if (k.end() < first || k.start > last) continue;
             const QRectF span(frameX(k.start) + 1, y + 3, k.duration * m_cellW - 2, m_rowH - 6);
             QColor fill = k.isEmpty() ? ui::withAlpha(pal.text, 10) : ui::mix(pal.bg2, pal.bg3, 0.6);
-            const Keyframe* next = ki + 1 < l.keys.size() ? &l.keys[ki + 1] : nullptr;
-            const bool validTween = next && !next->isEmpty() && !k.isEmpty();
+            // Broken tweens (nothing to interpolate) are drawn dashed, as in Animate.
+            const bool validTween = tweenAnimates(l, int(ki));
             if (k.tween == TweenType::Classic) fill = ui::withAlpha(pal.violet, validTween ? 70 : 38);
             if (k.tween == TweenType::Shape) fill = ui::withAlpha(pal.mint, validTween ? 70 : 38);
             p.setPen(Qt::NoPen);
