@@ -40,6 +40,9 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <unistd.h>
+#if defined(Q_OS_MACOS)
+#include <sys/ucontext.h>
+#endif
 #endif
 
 #ifndef VERTEXA_VERSION
@@ -261,7 +264,44 @@ void writeNamedStack(int fd, void* const* frames, int n)
     }
 }
 
-void onSignal(int sig, siginfo_t* info, void*)
+#if defined(Q_OS_MACOS)
+// macOS's backtrace() finds nothing from a handler on the alternate stack:
+// walk the frame pointers of the interrupted thread instead (always kept on
+// macOS). Each frame record is {previous frame pointer, return address}.
+int unwindContext(void* context, void** frames, int max)
+{
+    const auto* uc = static_cast<const ucontext_t*>(context);
+    if (!uc || !uc->uc_mcontext) return 0;
+    uintptr_t pc = 0, fp = 0;
+#if defined(__aarch64__)
+#if defined(__darwin_arm_thread_state64_get_pc)
+    pc = uintptr_t(__darwin_arm_thread_state64_get_pc(uc->uc_mcontext->__ss));
+    fp = uintptr_t(__darwin_arm_thread_state64_get_fp(uc->uc_mcontext->__ss));
+#else
+    pc = uintptr_t(uc->uc_mcontext->__ss.__pc);
+    fp = uintptr_t(uc->uc_mcontext->__ss.__fp);
+#endif
+#elif defined(__x86_64__)
+    pc = uintptr_t(uc->uc_mcontext->__ss.__rip);
+    fp = uintptr_t(uc->uc_mcontext->__ss.__rbp);
+#endif
+    constexpr uintptr_t kAddress = 0x0000FFFFFFFFFFFFull; // strips pointer signatures
+    int n = 0;
+    if (pc) frames[n++] = reinterpret_cast<void*>(pc & kAddress);
+    while (n < max && fp && (fp & 0x7) == 0) {
+        const auto* record = reinterpret_cast<const uintptr_t*>(fp);
+        const uintptr_t next = record[0], ret = record[1] & kAddress;
+        if (!ret) break;
+        frames[n++] = reinterpret_cast<void*>(ret);
+        // Frames go up the stack; anything else is not a frame record.
+        if (next <= fp || next - fp > (uintptr_t(16) << 20)) break;
+        fp = next;
+    }
+    return n;
+}
+#endif
+
+void onSignal(int sig, siginfo_t* info, void* context)
 {
     static volatile sig_atomic_t entered = 0;
     if (entered) _exit(128 + sig);
@@ -290,7 +330,12 @@ void onSignal(int sig, siginfo_t* info, void*)
         put(fd, "\nUptime: ");
         putNumber(fd, static_cast<unsigned long long>(time(nullptr) - g_start), 10);
         put(fd, " s\n\nStack:\n");
-        n = backtrace(frames, 128);
+#if defined(Q_OS_MACOS)
+        n = unwindContext(context, frames, 128);
+#else
+        (void)context;
+#endif
+        if (n < 2) n = backtrace(frames, 128);
         backtrace_symbols_fd(frames, n, fd);
         put(fd, "\nLog (latest last):\n");
         writeRing(fd);
