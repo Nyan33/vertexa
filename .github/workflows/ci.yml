@@ -69,11 +69,12 @@ jobs:
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.*'
+          modules: qtshadertools
           cache: true
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build g++-12 libgl1-mesa-dev libgl1-mesa-dri libegl1 libfuse2 xvfb xauth \
+          sudo apt-get install -y --no-install-recommends ninja-build g++-12 libgl1-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers libvulkan-dev libegl1 libfuse2 xvfb xauth \
             libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
             libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
       - name: Configure
@@ -84,6 +85,7 @@ jobs:
       - name: Build
         run: cmake --build build
       - name: Test
+        # Qt 6.8 with RHI: the stage is also checked on Mesa's Vulkan and OpenGL.
         env:
           VERTEXA_TEST_GPU: 1
         run: xvfb-run -a ctest --test-dir build --output-on-failure
@@ -122,6 +124,7 @@ jobs:
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.*'
+          modules: qtshadertools
           cache: true
       - name: Install dependencies
         run: brew install ninja || true
@@ -163,6 +166,7 @@ jobs:
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.*'
+          modules: qtshadertools
           cache: true
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Configure

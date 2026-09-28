@@ -3,6 +3,7 @@
 #include "Blend.h"
 #include "Filters.h"
 #include "QtConvert.h"
+#include "GpuGeometry.h"
 #include "Raster.h"
 
 #include <QCoreApplication>
@@ -15,7 +16,6 @@
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
-#include <QPainterPathStroker>
 #include <QThread>
 #include <QVector2D>
 #include <QVector4D>
@@ -26,6 +26,9 @@
 #include <unordered_map>
 
 namespace vx {
+
+using gpu::deviceRect;
+using gpu::maxScale;
 
 namespace {
 
@@ -206,126 +209,15 @@ void main() { fragColor = texture(img, gl_FragCoord.xy / size); }
 
 bool g_enabled = qEnvironmentVariable("VERTEXA_GPU") != QLatin1String("0");
 
-/// Software OpenGL implementations run on the CPU and are slower than the
-/// CPU renderer; they only count with VERTEXA_GPU=force (tests use Mesa's).
-bool softwareRenderer(const QString& name)
-{
-    static const char* kSoftware[] = {"llvmpipe", "softpipe", "swrast", "software rasterizer", "swiftshader",
-                                      "basic render", "gdi generic", "software renderer"};
-    const QString n = name.toLower();
-    for (const char* s : kSoftware)
-        if (n.contains(QLatin1String(s))) return true;
-    return false;
-}
 GlRenderer* g_instance = nullptr;
 bool g_tried = false;
 
-QRect deviceRect(const Rect& r)
-{
-    if (r.isEmpty()) return {};
-    return QRect(QPoint(int(std::floor(r.x0)) - 1, int(std::floor(r.y0)) - 1),
-                 QPoint(int(std::ceil(r.x1)) + 1, int(std::ceil(r.y1)) + 1));
-}
-
-/// Paint of a fill or stroke: a colour, or a gradient through a LUT.
-struct GlPaint {
-    int kind = 0;
-    float color[4] = {0, 0, 0, 0};
-    Affine toGradient;
-    float focal = 0;
-    int spread = 0;
-    std::array<uint8_t, 256 * 4> lut{};
-
-    explicit GlPaint(const FillStyle& f, const Affine& toDevice)
-    {
-        if (f.kind == FillStyle::Kind::Solid) {
-            const float a = f.color.a / 255.0f;
-            color[0] = f.color.r / 255.0f * a;
-            color[1] = f.color.g / 255.0f * a;
-            color[2] = f.color.b / 255.0f * a;
-            color[3] = a;
-            return;
-        }
-        kind = f.kind == FillStyle::Kind::Linear ? 1 : 2;
-        toGradient = (toDevice * f.gradient.matrix).inverted();
-        focal = float(std::clamp(f.gradient.focal, -0.98, 0.98));
-        spread = int(f.gradient.spread);
-        for (int i = 0; i < 256; ++i) {
-            const Color c = f.gradient.colorAt(i / 255.0);
-            const float a = c.a / 255.0f;
-            lut[size_t(i) * 4 + 0] = uint8_t(std::lround(c.r * a));
-            lut[size_t(i) * 4 + 1] = uint8_t(std::lround(c.g * a));
-            lut[size_t(i) * 4 + 2] = uint8_t(std::lround(c.b * a));
-            lut[size_t(i) * 4 + 3] = c.a;
-        }
-    }
-};
+using GlPaint = gpu::Paint;
 
 QMatrix3x3 toMatrix(const Affine& m)
 {
     const float rows[9] = {float(m.a), float(m.c), float(m.tx), float(m.b), float(m.d), float(m.ty), 0.0f, 0.0f, 1.0f};
     return QMatrix3x3(rows);
-}
-
-/// Largest scale factor of a transform (flattening must be fine enough for it).
-double maxScale(const Affine& m) { return std::max({std::hypot(m.a, m.b), std::hypot(m.c, m.d), 1e-9}); }
-
-/// Triangles whose winding numbers add up to the polygon's (counted by the
-/// stencil buffer). A long contour is split into chunks, each fanned from
-/// its first point, plus one fan over the chunk start points: the chords
-/// cancel, and triangles stay local instead of sweeping across the shape
-/// from a single point, which saves most of the fill work.
-void appendFan(const std::vector<Vec2>& poly, std::vector<float>& tri, Rect& bounds)
-{
-    const size_t n = poly.size();
-    if (n < 3) return;
-    auto push = [&](Vec2 a, Vec2 b, Vec2 c) {
-        for (Vec2 p : {a, b, c}) {
-            tri.push_back(float(p.x));
-            tri.push_back(float(p.y));
-        }
-    };
-    auto at = [&](size_t i) { return poly[i % n]; };
-    constexpr size_t kChunk = 24;
-    if (n <= 2 * kChunk) {
-        for (size_t i = 1; i + 1 < n; ++i) push(poly[0], poly[i], poly[i + 1]);
-    } else {
-        std::vector<Vec2> skeleton;
-        for (size_t s = 0; s < n; s += kChunk) {
-            skeleton.push_back(poly[s]);
-            const size_t e = std::min(s + kChunk, n); // the last chunk closes on poly[0]
-            for (size_t i = s + 1; i + 1 <= e; ++i) push(poly[s], at(i), at(i + 1));
-        }
-        for (size_t i = 1; i + 1 < skeleton.size(); ++i) push(skeleton[0], skeleton[i], skeleton[i + 1]);
-    }
-    for (const Vec2& p : poly) bounds.include(p);
-}
-
-void appendQPolygons(const QList<QPolygonF>& polys, std::vector<float>& tri, Rect& bounds)
-{
-    std::vector<Vec2> pts;
-    for (const QPolygonF& poly : polys) {
-        pts.clear();
-        for (const QPointF& p : poly) pts.push_back({p.x(), p.y()});
-        appendFan(pts, tri, bounds);
-    }
-}
-
-void setupStroker(QPainterPathStroker& st, const StrokeStyle& s, double& width, bool& cosmetic)
-{
-    cosmetic = s.pattern == StrokePattern::Hairline || !s.scaleWithTransform;
-    width = s.pattern == StrokePattern::Hairline ? 1.0 : s.width;
-    st.setWidth(std::max(0.01, width));
-    st.setCapStyle(s.cap == CapStyle::Round ? Qt::RoundCap : s.cap == CapStyle::Square ? Qt::SquareCap : Qt::FlatCap);
-    st.setJoinStyle(s.join == JoinStyle::Round ? Qt::RoundJoin : s.join == JoinStyle::Miter ? Qt::MiterJoin : Qt::BevelJoin);
-    st.setMiterLimit(s.miterLimit);
-    const double w = std::max(0.1, width);
-    if (s.pattern == StrokePattern::Dashed) {
-        st.setDashPattern(QList<qreal>{std::max(0.1, s.dash / w), std::max(0.1, s.gap / w)});
-    } else if (s.pattern == StrokePattern::Dotted) {
-        st.setCapStyle(Qt::RoundCap);
-        st.setDashPattern(QList<qreal>{0.01, std::max(0.5, (s.gap + s.width) / w)});
-    }
 }
 
 } // namespace
@@ -358,7 +250,17 @@ struct GlRenderer::Impl {
         size_t bytes = 0;
         uint64_t used = 0;
     };
-    std::unordered_map<const ShapeRenderData*, Geometry> geometry;
+    /// Keyed by shape and scale bucket: instances of a symbol at different
+    /// sizes keep their own flattening.
+    struct GeometryKey {
+        const ShapeRenderData* rd;
+        int bucket;
+        bool operator==(const GeometryKey&) const = default;
+    };
+    struct GeometryHash {
+        size_t operator()(const GeometryKey& k) const { return std::hash<const void*>{}(k.rd) ^ (size_t(k.bucket) * 0x9e3779b97f4a7c15ull); }
+    };
+    std::unordered_map<GeometryKey, Geometry, GeometryHash> geometry;
     size_t geometryBytes = 0;
     uint64_t tick = 0;
     double lastSubmitMs = 0.0; ///< CPU time spent walking and submitting the last frame
@@ -413,7 +315,7 @@ struct GlRenderer::Impl {
         samples = std::clamp(maxSamples, 0, 8);
         const QString rendererName = reinterpret_cast<const char*>(gl->glGetString(GL_RENDERER));
         device = QString("OpenGL %1 — %2").arg(reinterpret_cast<const char*>(gl->glGetString(GL_VERSION)), rendererName);
-        if (softwareRenderer(rendererName) && qEnvironmentVariable("VERTEXA_GPU") != QLatin1String("force")) {
+        if (gpu::isSoftwareDevice(rendererName) && qEnvironmentVariable("VERTEXA_GPU") != QLatin1String("force")) {
             ctx.doneCurrent();
             return false;
         }
@@ -507,11 +409,9 @@ struct GlRenderer::Impl {
     /// (in half-octave steps, so zooming within a step reuses it).
     Geometry& geometryFor(const std::shared_ptr<const ShapeRenderData>& rd, double scale)
     {
-        const int bucket = int(std::floor(std::log2(scale) * 2.0));
-        const double bucketScale = std::exp2((bucket + 1) / 2.0);
-        const double tol = 0.2 / bucketScale;
-        Geometry& g = geometry[rd.get()];
-        if (g.owner.lock() == rd && g.bucket == bucket && !(g.fills.empty() && g.strokes.empty() && !rd->isEmpty())) {
+        const int bucket = gpu::scaleBucket(scale);
+        Geometry& g = geometry[{rd.get(), bucket}];
+        if (g.owner.lock() == rd && !(g.fills.empty() && g.strokes.empty() && !rd->isEmpty())) {
             g.used = ++tick;
             return g;
         }
@@ -520,39 +420,15 @@ struct GlRenderer::Impl {
         g.owner = rd;
         g.bucket = bucket;
         g.used = ++tick;
-        std::vector<float> tri;
-        std::vector<Vec2> pts;
-        for (const auto& fp : rd->fills) {
-            tri.clear();
-            Rect bounds;
-            for (const Contour& c : fp.contours) {
-                pts.clear();
-                flattenContour(c, Affine{}, tol, pts);
-                appendFan(pts, tri, bounds);
-            }
-            g.bytes += tri.size() * sizeof(float);
-            g.fills.push_back(upload(tri, bounds));
+        const gpu::FlatShape flat = gpu::flattenShape(*rd, bucket);
+        for (const auto& part : flat.fills) {
+            g.bytes += part.tri.size() * sizeof(float);
+            g.fills.push_back(upload(part.tri, part.bounds));
         }
-        for (const auto& sp : rd->strokes) {
-            double width = 1.0;
-            bool cosmetic = false;
-            QPainterPathStroker st;
-            setupStroker(st, sp.style, width, cosmetic);
-            if (cosmetic) {
-                g.strokes.emplace_back(); // drawn in device space every time
-                continue;
-            }
-            QPainterPath path;
-            for (size_t i = 0; i < sp.chains.size(); ++i) appendChain(path, sp.chains[i], sp.closed[i]);
-            // Flatten at the bucket's scale, then back to shape space.
-            QList<QPolygonF> polys = st.createStroke(path).toSubpathPolygons(QTransform::fromScale(bucketScale, bucketScale));
-            for (QPolygonF& poly : polys)
-                for (QPointF& p : poly) p /= bucketScale;
-            tri.clear();
-            Rect bounds;
-            appendQPolygons(polys, tri, bounds);
-            g.bytes += tri.size() * sizeof(float);
-            g.strokes.push_back(upload(tri, bounds));
+        for (const auto& part : flat.strokes) {
+            // Cosmetic strokes (no buffer) are drawn in device space every time.
+            g.bytes += part.tri.size() * sizeof(float);
+            g.strokes.push_back(part.cosmetic ? Fans{} : upload(part.tri, part.bounds));
         }
         geometryBytes += g.bytes;
         return g;
@@ -629,15 +505,9 @@ public:
                 continue;
             }
             // Cosmetic strokes keep their width on screen: stroked in device space.
-            QPainterPath path;
-            for (size_t k = 0; k < sp.chains.size(); ++k) appendChain(path, sp.chains[k], sp.closed[k]);
-            double width = 1.0;
-            bool cosmetic = false;
-            QPainterPathStroker st;
-            setupStroker(st, sp.style, width, cosmetic);
             std::vector<float> tri;
             Rect bounds;
-            appendQPolygons(st.createStroke(toQTransform(m).map(path)).toSubpathPolygons(), tri, bounds);
+            gpu::strokeInDeviceSpace(sp, m, tri, bounds);
             fill(tri, bounds, GlPaint(paint, m), box);
         }
     }
@@ -647,16 +517,9 @@ public:
         if (rd.isEmpty() || !valid()) return;
         const QRect box = clip.intersected(rect());
         if (box.isEmpty()) return;
-        QPainterPath path;
-        for (const auto& fp : rd.fills)
-            for (const Contour& c : fp.contours) appendChain(path, c, true);
-        for (const auto& sp : rd.strokes)
-            for (size_t i = 0; i < sp.chains.size(); ++i) appendChain(path, sp.chains[i], sp.closed[i]);
-        QPainterPathStroker st;
-        st.setWidth(1.0);
         std::vector<float> tri;
         Rect bounds;
-        appendQPolygons(st.createStroke(toQTransform(m).map(path)).toSubpathPolygons(), tri, bounds);
+        gpu::outlineInDeviceSpace(rd, m, tri, bounds);
         fill(tri, bounds, GlPaint(FillStyle::solid(fromQColor(color)), m), box);
     }
 

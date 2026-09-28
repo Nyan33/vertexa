@@ -5,6 +5,7 @@ add_library(vx_render STATIC
     Filters.h Filters.cpp
     Surface.h Surface.cpp
     Renderer.h Renderer.cpp
+    GpuGeometry.h GpuGeometry.cpp
     GlRenderer.h GlRenderer.cpp
     LayerCache.h LayerCache.cpp
     SvgExport.h SvgExport.cpp
@@ -12,3 +13,27 @@ add_library(vx_render STATIC
 target_include_directories(vx_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(vx_render PUBLIC vx_core Qt6::Gui Qt6::OpenGL)
 set_target_properties(vx_render PROPERTIES AUTOMOC OFF POSITION_INDEPENDENT_CODE ON)
+
+if(VERTEXA_RHI)
+    target_sources(vx_render PRIVATE RhiRenderer.h RhiRenderer.cpp)
+    target_link_libraries(vx_render PUBLIC Qt6::GuiPrivate)
+    target_compile_definitions(vx_render PUBLIC VERTEXA_HAVE_RHI)
+    # SPIR-V, GLSL (OpenGL 3.3 / ES 3.0), HLSL and MSL variants, built into
+    # the library as :/vertexa/shaders/<name>.qsb.
+    qt_add_shaders(vx_render "vx_render_shaders"
+        PREFIX "/vertexa/shaders"
+        BASE shaders
+        GLSL "300es,330"
+        HLSL 50
+        MSL 12
+        FILES
+            shaders/quad.vert
+            shaders/stencil.frag
+            shaders/fill.frag
+            shaders/composite.frag
+            shaders/mask.frag
+            shaders/colortransform.frag
+            shaders/copy.frag
+            shaders/display.frag
+    )
+endif()

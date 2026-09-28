@@ -7,6 +7,8 @@
 #include "tools/SelectTools.h"
 
 #include "core/Evaluate.h"
+#include "StageCanvas.h"
+
 #include "render/Blend.h"
 #include "render/GlRenderer.h"
 #include "render/QtConvert.h"
@@ -93,6 +95,7 @@ StageView::StageView(Editor* editor, QWidget* parent) : QWidget(parent), m_ed(ed
     connect(m_ed, &Editor::layerChanged, this, qOverload<>(&StageView::update));
     connect(m_ed, &Editor::toolChanged, this, &StageView::activateTool);
     connect(ui::Theme::instance(), &ui::Theme::changed, this, &StageView::invalidate);
+    setGpuStage(GlRenderer::enabled());
 }
 
 StageView::~StageView() = default;
@@ -162,6 +165,9 @@ void StageView::centerStage()
 void StageView::invalidate()
 {
     m_cacheValid = false;
+#ifdef VERTEXA_HAVE_RHI
+    if (m_gpuStage) static_cast<StageCanvas*>(m_canvas)->redraw();
+#endif
     update();
 }
 
@@ -219,17 +225,89 @@ QCursor StageView::toolCursor(const QString& kind) const
 
 QColor StageView::colorAt(QPointF w) const
 {
-    if (m_cache.isNull()) return {};
-    const qreal dpr = m_cache.devicePixelRatio();
+    const qreal dpr = devicePixelRatioF();
     const QPoint px(int(w.x() * dpr), int(w.y() * dpr));
-    if (!m_cache.rect().contains(px)) return {};
-    const QRgb c = m_cache.pixel(px); // unpremultiplied by QImage::pixel
+    QRgb c = 0;
+    if (m_gpuStage) {
+        // The frame is on the GPU: draw the one pixel on the CPU.
+        if (!rect().contains(w.toPoint())) return {};
+        QImage one(1, 1, QImage::Format_ARGB32_Premultiplied);
+        one.fill(0);
+        const Document& d = m_ed->displayDoc();
+        Renderer(d, frameOptions()).render(one, m_ed->timelineOf(d), m_ed->frame(),
+                                           Affine::translate(-px.x(), -px.y()) * deviceView() * m_ed->contextMatrix());
+        c = one.pixel(0, 0); // unpremultiplied by QImage::pixel
+    } else {
+        if (m_cache.isNull() || !m_cache.rect().contains(px)) return {};
+        c = m_cache.pixel(px);
+    }
     const Document& d = m_ed->doc();
     const QRectF stage = toQTransform(stageToWidget()).mapRect(QRectF(0, 0, d.width, d.height));
     const QColor bg = stage.contains(w) ? toQColor(d.background) : ui::Theme::p().bg0;
     const double a = qAlpha(c) / 255.0;
     return QColor::fromRgbF(float(qRed(c) / 255.0 * a + bg.redF() * (1 - a)), float(qGreen(c) / 255.0 * a + bg.greenF() * (1 - a)),
                             float(qBlue(c) / 255.0 * a + bg.blueF() * (1 - a)));
+}
+
+Affine StageView::deviceView() const { return Affine::scale(devicePixelRatioF()) * stageToWidget(); }
+
+RenderOptions StageView::frameOptions() const
+{
+    RenderOptions o;
+    o.clipFrame = m_ed->isPlaying() ? m_ed->frame() : 0;
+    o.hotButton = m_hotButton;
+    o.hotState = m_buttonDown ? ButtonState::Down : ButtonState::Over;
+    return o;
+}
+
+std::vector<StageView::Underlay> StageView::underlays(const Document& d) const
+{
+    std::vector<Underlay> out;
+    const Affine devView = deviceView();
+    const Timeline& tl = m_ed->timelineOf(d);
+    const Affine ctx = devView * m_ed->contextMatrix();
+    const ui::Palette& pal = ui::Theme::p();
+    if (m_ed->inSymbol()) {
+        const auto path = m_ed->focusPath();
+        if (!path.empty()) {
+            RenderOptions o;
+            o.focusPath = path;
+            out.push_back({&d.scenes[std::clamp(m_ed->scene(), 0, int(d.scenes.size()) - 1)], m_ed->rootFrame(), devView, {}, o, 0.3});
+        }
+    }
+    if (m_ed->onionSkin && !m_ed->isPlaying()) {
+        auto onion = [&](int f, double alpha, const QColor& tint) {
+            if (f < 0 || f >= tl.frameCount()) return;
+            RenderOptions o;
+            ColorTransform ct;
+            if (m_ed->onionOutline) {
+                o.forceOutline = true;
+                o.outlineColor = tint;
+            } else {
+                ct.rm = ct.gm = ct.bm = 0.35;
+                ct.ro = tint.red() * 0.65;
+                ct.go = tint.green() * 0.65;
+                ct.bo = tint.blue() * 0.65;
+            }
+            out.push_back({&tl, f, ctx, ct, o, alpha});
+        };
+        for (int k = m_ed->onionBefore; k >= 1; --k)
+            onion(m_ed->frame() - k, 0.55 * (1.0 - double(k - 1) / std::max(1, m_ed->onionBefore)), pal.selection);
+        for (int k = m_ed->onionAfter; k >= 1; --k)
+            onion(m_ed->frame() + k, 0.55 * (1.0 - double(k - 1) / std::max(1, m_ed->onionAfter)), pal.mint);
+    }
+    return out;
+}
+
+void StageView::drawFrame(Surface& target)
+{
+    const Document& d = m_ed->displayDoc();
+    for (const Underlay& u : underlays(d)) {
+        std::unique_ptr<Surface> layer = target.makeLayer(target.size());
+        Renderer(d, u.opts).render(*layer, *u.timeline, u.frame, u.view, u.ct);
+        target.composite(*layer, QPoint(0, 0), BlendMode::Normal, u.alpha);
+    }
+    Renderer(d, frameOptions()).render(target, m_ed->timelineOf(d), m_ed->frame(), deviceView() * m_ed->contextMatrix());
 }
 
 void StageView::renderCache()
@@ -239,58 +317,18 @@ void StageView::renderCache()
     if (m_cache.size() != sz) m_cache = QImage(sz, QImage::Format_ARGB32_Premultiplied);
     m_cache.setDevicePixelRatio(1.0);
     m_cache.fill(0);
-    const Affine devView = Affine::scale(dpr) * stageToWidget();
     const Document& d = m_ed->displayDoc();
     const Timeline& tl = m_ed->timelineOf(d);
-    const Affine ctx = devView * m_ed->contextMatrix();
-    const ui::Palette& pal = ui::Theme::p();
-
-    if (m_ed->inSymbol()) {
-        const auto path = m_ed->focusPath();
-        if (!path.empty()) {
-            RenderOptions o;
-            o.focusPath = path;
-            QImage dim(sz, QImage::Format_ARGB32_Premultiplied);
-            dim.fill(0);
-            renderAccelerated(dim, d, d.scenes[std::clamp(m_ed->scene(), 0, int(d.scenes.size()) - 1)], m_ed->rootFrame(), devView, {}, o, true);
-            compositeImage(m_cache, dim, QPoint(0, 0), BlendMode::Normal, 0.3);
-        }
+    const std::vector<Underlay> under = underlays(d);
+    for (const Underlay& u : under) {
+        QImage buf(sz, QImage::Format_ARGB32_Premultiplied);
+        buf.fill(0);
+        renderAccelerated(buf, d, *u.timeline, u.frame, u.view, u.ct, u.opts, true);
+        compositeImage(m_cache, buf, QPoint(0, 0), BlendMode::Normal, u.alpha);
     }
-
-    if (m_ed->onionSkin && !m_ed->isPlaying()) {
-        auto onion = [&](int f, double alpha, const QColor& tint) {
-            if (f < 0 || f >= tl.frameCount()) return;
-            QImage buf(sz, QImage::Format_ARGB32_Premultiplied);
-            buf.fill(0);
-            RenderOptions o;
-            if (m_ed->onionOutline) {
-                o.forceOutline = true;
-                o.outlineColor = tint;
-                renderAccelerated(buf, d, tl, f, ctx, {}, o, true);
-            } else {
-                ColorTransform ct;
-                ct.rm = ct.gm = ct.bm = 0.35;
-                ct.ro = tint.red() * 0.65;
-                ct.go = tint.green() * 0.65;
-                ct.bo = tint.blue() * 0.65;
-                renderAccelerated(buf, d, tl, f, ctx, ct, o, true);
-            }
-            compositeImage(m_cache, buf, QPoint(0, 0), BlendMode::Normal, alpha);
-        };
-        for (int k = m_ed->onionBefore; k >= 1; --k)
-            onion(m_ed->frame() - k, 0.55 * (1.0 - double(k - 1) / std::max(1, m_ed->onionBefore)), pal.selection);
-        for (int k = m_ed->onionAfter; k >= 1; --k)
-            onion(m_ed->frame() + k, 0.55 * (1.0 - double(k - 1) / std::max(1, m_ed->onionAfter)), pal.mint);
-    }
-
-    RenderOptions o;
-    o.clipFrame = m_ed->isPlaying() ? m_ed->frame() : 0;
-    o.hotButton = m_hotButton;
-    o.hotState = m_buttonDown ? ButtonState::Down : ButtonState::Over;
-    const bool empty = !m_ed->inSymbol() && !(m_ed->onionSkin && !m_ed->isPlaying());
     QString context = QString::number(m_ed->scene());
     for (const ContextEntry& c : m_ed->contextStack()) context += '/' + QString::fromStdString(c.symbolId);
-    m_layers.render(m_cache, d, tl, m_ed->frame(), ctx, o, context, empty);
+    m_layers.render(m_cache, d, tl, m_ed->frame(), deviceView() * m_ed->contextMatrix(), frameOptions(), context, under.empty());
     m_cache.setDevicePixelRatio(dpr);
     composeView();
     m_cacheValid = true;
@@ -394,18 +432,26 @@ void StageView::drawSelection(QPainter& p)
 
 void StageView::paintEvent(QPaintEvent*)
 {
+    // On the GPU the canvas and the overlay above it paint everything.
+    if (m_gpuStage) return;
     if (!m_cacheValid) renderCache();
     QPainter p(this);
-    const ui::Palette& pal = ui::Theme::p();
     p.drawImage(QPointF(0, 0), m_view);
+    paintOverlays(p);
+}
 
+void StageView::paintOverlays(QPainter& p)
+{
+    const ui::Palette& pal = ui::Theme::p();
     if (m_ed->inSymbol()) {
         // Registration point of the symbol being edited.
         const QPointF reg = toQPoint(timelineToWidget().map({0, 0}));
+        p.save();
         p.setRenderHint(QPainter::Antialiasing);
         p.setPen(QPen(pal.text, 1.2));
         p.drawLine(reg + QPointF(-7, 0), reg + QPointF(7, 0));
         p.drawLine(reg + QPointF(0, -7), reg + QPointF(0, 7));
+        p.restore();
     }
     drawSliceGuides(p);
     drawSelection(p);
@@ -413,8 +459,60 @@ void StageView::paintEvent(QPaintEvent*)
     if (m_strokeTool && m_strokeTool != m_active) m_strokeTool->paint(p);
 }
 
+void StageView::setGpuStage(bool on)
+{
+#ifdef VERTEXA_HAVE_RHI
+    if (on && !rhiChoice().usable) on = false;
+    if (on && !m_canvas) {
+        m_canvas = new StageCanvas(this);
+        m_overlay = new StageOverlay(this);
+    }
+    if (on && static_cast<StageCanvas*>(m_canvas)->failed()) on = false;
+    if (m_canvas) {
+        m_canvas->setGeometry(rect());
+        m_overlay->setGeometry(rect());
+        m_canvas->setVisible(on);
+        m_overlay->setVisible(on);
+        m_overlay->raise();
+    }
+    m_gpuStage = on;
+#else
+    (void)on;
+#endif
+    invalidate();
+}
+
+QString StageView::gpuStageDevice() const
+{
+#ifdef VERTEXA_HAVE_RHI
+    if (m_gpuStage && m_canvas) return static_cast<StageCanvas*>(m_canvas)->deviceName();
+#endif
+    return {};
+}
+
+#ifdef VERTEXA_HAVE_RHI
+RhiRenderer::Backdrop StageView::backdrop() const
+{
+    const ui::Palette& pal = ui::Theme::p();
+    const Document& d = m_ed->displayDoc();
+    const qreal dpr = devicePixelRatioF();
+    RhiRenderer::Backdrop b;
+    const QRectF stage = toQTransform(stageToWidget()).mapRect(QRectF(0, 0, d.width, d.height));
+    b.stage = QRectF(stage.topLeft() * dpr, stage.size() * dpr);
+    b.margin = pal.dark ? ui::mix(pal.bg0, pal.bg1, 0.35) : ui::mix(pal.bg0, pal.bg1, 0.2);
+    b.paper = toQColor(d.background);
+    b.shadowAlpha = (pal.dark ? 16 : 8) / 255.0;
+    b.dpr = dpr;
+    return b;
+}
+#endif
+
 void StageView::resizeEvent(QResizeEvent*)
 {
+    if (m_canvas) {
+        m_canvas->setGeometry(rect());
+        m_overlay->setGeometry(rect());
+    }
     if (!m_placed && width() > 100 && height() > 100) {
         m_placed = true;
         fitStage();

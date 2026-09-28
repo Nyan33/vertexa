@@ -3,8 +3,11 @@
 // rendered both ways and compared pixel by pixel: multisampled edges may
 // differ slightly from exact coverage, everything else must match.
 //
+// Every GPU path available is checked: the OpenGL renderer and, when built
+// with RHI, the RHI renderer on Vulkan and on OpenGL.
+//
 // Opt-in: set VERTEXA_TEST_GPU=1 (CI runs it under xvfb-run with Mesa's
-// software OpenGL). Skipped when no OpenGL 3.3 / ES 3.0 context exists.
+// software OpenGL and Vulkan). Paths without a device are skipped.
 #include "TestMain.h"
 
 #include "core/DocumentOps.h"
@@ -12,34 +15,68 @@
 #include "core/io/FlaImport.h"
 #include "render/GlRenderer.h"
 #include "render/LayerCache.h"
+#ifdef VERTEXA_HAVE_RHI
+#include "render/RhiRenderer.h"
+#endif
 
 #include <QDir>
 #include <QGuiApplication>
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <cstdlib>
 
 using namespace vx;
 
 namespace {
 
-bool haveGpu()
+/// A GPU path: renders a frame into a transparent image.
+struct Backend {
+    QString name;
+    std::function<QImage(const Document&, const Timeline&, int, QSize, const Affine&, const RenderOptions&)> render;
+};
+
+std::vector<Backend>& backends()
 {
-    static bool reported = false;
+    static std::vector<Backend> list;
+    static bool built = false;
+    if (built) return list;
+    built = true;
     if (qEnvironmentVariable("VERTEXA_TEST_GPU") != QLatin1String("1")) {
-        if (!reported) std::printf("  set VERTEXA_TEST_GPU=1 to compare GPU and CPU rendering\n");
-        reported = true;
-        return false;
+        std::printf("  set VERTEXA_TEST_GPU=1 to compare GPU and CPU rendering\n");
+        return list;
     }
-    GlRenderer* gpu = GlRenderer::instance();
-    if (!reported) {
-        reported = true;
-        if (gpu) std::printf("  GPU: %s, %dx MSAA\n", qPrintable(gpu->deviceName()), gpu->samples());
-        else std::printf("  no OpenGL 3.3 / ES 3.0 context: GPU tests skipped\n");
+    if (GlRenderer* gl = GlRenderer::instance()) {
+        std::printf("  OpenGL renderer: %s, %dx MSAA\n", qPrintable(gl->deviceName()), gl->samples());
+        list.push_back({"GL", [gl](const Document& d, const Timeline& tl, int frame, QSize size, const Affine& view, const RenderOptions& o) {
+                            QImage img(size, QImage::Format_ARGB32_Premultiplied);
+                            img.fill(0);
+                            if (!gl->render(img, d, tl, frame, view, {}, o)) return QImage();
+                            return img;
+                        }});
+    } else {
+        std::printf("  no OpenGL 3.3 / ES 3.0 context: OpenGL renderer skipped\n");
     }
-    return gpu != nullptr;
+#ifdef VERTEXA_HAVE_RHI
+    for (const char* api : {"vulkan", "opengl"}) {
+        QString why;
+        std::shared_ptr<RhiRenderer> rhi = RhiRenderer::createOffscreen(api, &why);
+        if (!rhi || !rhi->isValid()) {
+            std::printf("  RHI %s: %s, skipped\n", api, qPrintable(why));
+            continue;
+        }
+        std::printf("  RHI renderer: %s, %dx MSAA\n", qPrintable(rhi->deviceName()), rhi->samples());
+        list.push_back({"RHI " + rhi->backendName(),
+                        [rhi](const Document& d, const Timeline& tl, int frame, QSize size, const Affine& view, const RenderOptions& o) {
+                            return rhi->renderImage(size, [&](Surface& s) { Renderer(d, o).render(s, tl, frame, view); });
+                        }});
+    }
+#endif
+    return list;
 }
+
+bool haveGpu() { return !backends().empty(); }
 
 struct Diff {
     double mean = 0;     ///< mean absolute channel difference (0..255)
@@ -72,19 +109,27 @@ Diff compare(const QImage& a, const QImage& b)
 bool sameOnGpu(const Document& doc, const Timeline& tl, int frame, QSize size, const Affine& view, const char* what,
                RenderOptions opts = {}, double maxBad = 0.004)
 {
-    QImage cpu(size, QImage::Format_ARGB32_Premultiplied), gpu(size, QImage::Format_ARGB32_Premultiplied);
+    QImage cpu(size, QImage::Format_ARGB32_Premultiplied);
     cpu.fill(0);
-    gpu.fill(0);
     Renderer(doc, opts).render(cpu, tl, frame, view);
-    const bool drawn = GlRenderer::instance()->render(gpu, doc, tl, frame, view, {}, opts);
-    const Diff d = compare(cpu, gpu);
-    std::printf("  %-28s mean %.3f  edge-ish %.3f%%\n", what, d.mean, d.bad * 100);
-    if (!(drawn && d.mean < 1.5 && d.bad < maxBad)) {
-        cpu.save(QString("gpu-fail-%1-cpu.png").arg(what));
-        gpu.save(QString("gpu-fail-%1-gpu.png").arg(what));
-        return false;
+    bool ok = true;
+    for (const Backend& b : backends()) {
+        const QImage gpu = b.render(doc, tl, frame, size, view, opts);
+        if (gpu.size() != size) {
+            std::printf("  %-10s %-28s NOT DRAWN\n", qPrintable(b.name), what);
+            ok = false;
+            continue;
+        }
+        const Diff d = compare(cpu, gpu);
+        std::printf("  %-10s %-28s mean %.3f  edge-ish %.3f%%\n", qPrintable(b.name), what, d.mean, d.bad * 100);
+        if (!(d.mean < 1.5 && d.bad < maxBad)) {
+            const QString tag = QString("%1-%2").arg(b.name, what).replace(' ', '_');
+            cpu.save(QString("gpu-fail-%1-cpu.png").arg(tag));
+            gpu.save(QString("gpu-fail-%1-gpu.png").arg(tag));
+            ok = false;
+        }
     }
-    return true;
+    return ok;
 }
 
 FillStyle gradient(FillStyle::Kind kind, SpreadMode spread, double focal, const Rect& r)
@@ -209,7 +254,7 @@ VX_TEST(gpu_blend_modes_and_colour_effects)
 
 VX_TEST(gpu_layer_cache_draws_over_cached_layers)
 {
-    if (!haveGpu()) return;
+    if (!haveGpu() || !GlRenderer::instance()) return;
     // The top layer multiplies with the (cached) layers below it: it is drawn
     // on the GPU over their pixels.
     const Document d = compositingScene(BlendMode::Multiply);
@@ -307,5 +352,7 @@ int main(int argc, char** argv)
     // Software OpenGL (Mesa's llvmpipe in CI) is fine for checking pixels.
     qputenv("VERTEXA_GPU", "force");
     QGuiApplication app(argc, argv);
-    return vxtest::runAll(argc, argv);
+    const int result = vxtest::runAll(argc, argv);
+    backends().clear(); // GPU devices go before the application
+    return result;
 }

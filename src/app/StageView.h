@@ -7,6 +7,9 @@
 #include "tools/Tool.h"
 
 #include "render/LayerCache.h"
+#ifdef VERTEXA_HAVE_RHI
+#include "render/RhiRenderer.h"
+#endif
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -56,6 +59,21 @@ public:
     /// Custom cursors: "bend", "corner", "rotate".
     QCursor toolCursor(const QString& kind) const;
 
+    /// Draws and shows the stage on the GPU (through RHI) when possible;
+    /// otherwise on the CPU (or the OpenGL renderer).
+    void setGpuStage(bool on);
+    bool gpuStage() const { return m_gpuStage; }
+    /// "Vulkan — NVIDIA …" while the stage is on the GPU.
+    QString gpuStageDevice() const;
+    /// Draws the frame (dimmed parent, onion skins, the timeline) on `target`,
+    /// in device pixels.
+    void drawFrame(Surface& target);
+    /// Selection, guides and tool feedback over the stage.
+    void paintOverlays(QPainter& p);
+#ifdef VERTEXA_HAVE_RHI
+    RhiRenderer::Backdrop backdrop() const;
+#endif
+
 signals:
     void zoomChanged(double zoom);
     void pointerMoved(double x, double y);
@@ -78,6 +96,19 @@ protected:
     bool event(QEvent*) override;
 
 private:
+    /// A frame drawn under the current one: the dimmed parent timeline while
+    /// editing in place, onion skins.
+    struct Underlay {
+        const Timeline* timeline;
+        int frame;
+        Affine view;
+        ColorTransform ct;
+        RenderOptions opts;
+        double alpha;
+    };
+    std::vector<Underlay> underlays(const Document& d) const;
+    RenderOptions frameOptions() const;
+    Affine deviceView() const;
     void renderCache();
     void composeView();
     void drawSelection(QPainter& p);
@@ -100,6 +131,9 @@ private:
     bool m_backdropDark = false;
     LayerCache m_layers;
     bool m_cacheValid = false;
+    bool m_gpuStage = false;
+    QWidget* m_canvas = nullptr;  ///< StageCanvas (RHI builds)
+    QWidget* m_overlay = nullptr; ///< StageOverlay (RHI builds)
     bool m_spaceDown = false;
     bool m_panning = false;
     QPointF m_panAnchor;

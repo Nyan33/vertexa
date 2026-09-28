@@ -19,6 +19,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(Editor* editor, QWidget* parent = nullptr);
+    ~MainWindow() override;
     QAction* action(const QString& name) const { return m_actions.value(name); }
     bool openFile(const QString& path);
     StageView* stage() const { return m_stage; }

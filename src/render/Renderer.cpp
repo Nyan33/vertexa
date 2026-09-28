@@ -526,7 +526,7 @@ void Renderer::renderElement(Surface& target, const EvalItem& item, const Ctx& c
             const QRect area = deviceRect(m.mapRect(local)).adjusted(-margin, -margin, margin, margin) &
                                clip.adjusted(-margin, -margin, margin, margin);
             if (area.isEmpty() || double(area.width()) * area.height() > 64e6) return;
-            std::unique_ptr<Surface> buf = target.makeLayer(area.size());
+            std::unique_ptr<Surface> buf = target.makeFilterLayer(area.size());
             Ctx fc = ic;
             fc.m = Affine::translate(-area.x(), -area.y()) * m;
             fc.sliceBase = fc.m;

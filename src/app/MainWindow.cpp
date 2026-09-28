@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "Dialogs.h"
 #include "Icons.h"
+#include "StageCanvas.h"
 #include "StageView.h"
 #include "Theme.h"
 #include "Widgets.h"
@@ -19,6 +20,7 @@
 #include "render/SvgExport.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDockWidget>
@@ -86,6 +88,13 @@ MainWindow::MainWindow(Editor* editor, QWidget* parent) : QMainWindow(parent), m
     updateBreadcrumb();
     rebuildRecentMenu();
     QTimer::singleShot(0, this, &MainWindow::reportRenderer);
+}
+
+MainWindow::~MainWindow()
+{
+    // Qt 6.8.4 deletes the status bar's layout item before the dock tab
+    // bars, whose destruction then walks the layout: remove it first.
+    delete statusBar();
 }
 
 QAction* MainWindow::add(const QString& name, const QString& text, const QKeySequence& key, std::function<void()> fn, const QString& icon)
@@ -167,9 +176,26 @@ void MainWindow::createActions()
     addCheck("gpuRendering", tr("GPU Rendering"), {}, GlRenderer::enabled(), [this](bool b) {
         QSettings().setValue("render/gpu", b);
         GlRenderer::setEnabled(b);
-        m_stage->invalidate();
+        m_stage->setGpuStage(b);
         reportRenderer();
     });
+#ifdef VERTEXA_HAVE_RHI
+    // Graphics API of the stage (read at start).
+    {
+        auto* group = new QActionGroup(this);
+        const QString current = QSettings().value("render/api", "auto").toString();
+        QList<QPair<QString, QString>> apis = {{"auto", tr("Automatic")}};
+        apis += rhiApis();
+        for (const auto& [id, label] : apis) {
+            QAction* a = addCheck("api:" + id, label, {}, current == id, [this, id = id](bool on) {
+                if (!on) return;
+                QSettings().setValue("render/api", id);
+                m_ed->notify(tr("The graphics API changes the next time Vertexa starts"));
+            });
+            group->addAction(a);
+        }
+    }
+#endif
     connect(m_ed, &Editor::onionChanged, this, [this] {
         const QSignalBlocker b1(m_actions["onionSkin"]), b2(m_actions["onionOutline"]);
         m_actions["onionSkin"]->setChecked(m_ed->onionSkin);
@@ -353,6 +379,12 @@ void MainWindow::createMenus()
     view->addAction(a("onionOutline"));
     view->addSeparator();
     view->addAction(a("gpuRendering"));
+#ifdef VERTEXA_HAVE_RHI
+    QMenu* api = view->addMenu(tr("Graphics &API"));
+    api->addAction(m_actions.value("api:auto"));
+    api->addSeparator();
+    for (const auto& [id, label] : rhiApis()) api->addAction(m_actions.value("api:" + id));
+#endif
     view->addAction(a("darkTheme"));
 
     QMenu* insert = menuBar()->addMenu(tr("&Insert"));
@@ -770,6 +802,10 @@ void MainWindow::closeEvent(QCloseEvent* e)
 
 void MainWindow::reportRenderer()
 {
+    if (m_stage->gpuStage()) {
+        m_ed->notify(tr("Stage drawn on the GPU: %1").arg(m_stage->gpuStageDevice()));
+        return;
+    }
     if (GlRenderer* gpu = GlRenderer::instance()) m_ed->notify(tr("Rendering on the GPU: %1").arg(gpu->deviceName()));
     else if (GlRenderer::enabled()) m_ed->notify(tr("No suitable GPU (OpenGL 3.3): rendering on the CPU"));
     else m_ed->notify(tr("Rendering on the CPU"));
