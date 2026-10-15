@@ -1,0 +1,4 @@
+build/
+build-*/
+*.vxa.tmp
+compile_commands.json

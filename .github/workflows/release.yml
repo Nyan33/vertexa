@@ -1,0 +1,93 @@
+name: Build
+
+# Every push to main builds Vertexa for Windows and publishes it as a new release under a new tag:
+# vMAJOR.MINOR.PATCH, MAJOR.MINOR from CMakeLists.txt, PATCH one past the highest existing one, so an
+# existing tag is never moved or overwritten. The notes are the commits since the previous release
+# (the first release takes its notes from CHANGELOG.md). Pull requests only build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # all history and tags: the version and the notes come from them
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            zip
+            git
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Package
+        run: |
+          mkdir -p dist/Vertexa
+          cp build/vertexa.exe dist/Vertexa/
+          cp README.md CHANGELOG.md dist/Vertexa/
+          cp assets/cursors/LICENSE-Apache-2.0.txt dist/Vertexa/
+          cd dist && zip -r Vertexa-windows-x64.zip Vertexa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vertexa-windows-x64
+          path: dist/Vertexa-windows-x64.zip
+
+      - name: Version and notes
+        if: github.event_name != 'pull_request'
+        id: ver
+        run: |
+          git fetch --tags --force
+          mm=$(grep -oE 'project\(Vertexa VERSION [0-9]+\.[0-9]+' CMakeLists.txt | grep -oE '[0-9]+\.[0-9]+$')
+          prev=$(git tag -l "v*" --sort=-v:refname | head -n1)
+          last=$(git tag -l "v${mm}.*" --sort=-v:refname | head -n1)
+          if [ -z "$last" ]; then patch=0; else patch=$(( ${last##*.} + 1 )); fi
+          tag="v${mm}.${patch}"
+          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null; do patch=$((patch + 1)); tag="v${mm}.${patch}"; done
+          if [ -z "$prev" ]; then
+            cp CHANGELOG.md notes.md
+          else
+            {
+              echo "## Changes since $prev"
+              echo
+              git log --no-merges --pretty='- %s' "$prev..HEAD"
+              echo
+              echo "Full list: https://github.com/${GITHUB_REPOSITORY}/compare/$prev...$tag"
+            } > notes.md
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Vertexa Alpha ${{ steps.ver.outputs.tag }}
+          body_path: notes.md
+          prerelease: true
+          files: dist/Vertexa-windows-x64.zip

@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vertexa — C · Dope Sheet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="shared/data.js"></script>
+<script src="shared/art.js"></script>
+<style>
+  :root {
+    --bg: #0a0f1d; --s1: #0f1628; --s2: #141d34; --s3: #1b2542; --s4: #243052;
+    --line: #1f2a47; --line2: #2b3860;
+    --tx: #f3ecdc; --tx2: #a7aec3; --tx3: #69738f;
+    --ac: #ffb547; --ac2: #ffb5471a; --ac3: #ffb54766;
+    --prev: #ff7a6b; --next: #5ce1e6;
+    --mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--tx); font: 12.5px/1.35 'Space Grotesk', 'Segoe UI', system-ui, sans-serif; overflow: hidden; user-select: none; -webkit-font-smoothing: antialiased; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .cap { font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--tx3); font-weight: 600; }
+
+  .app { display: grid; height: 100vh; grid-template-columns: 250px 1fr 290px; grid-template-rows: 50px 44px 1fr 340px; }
+
+  .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 22px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .brand { font-weight: 700; letter-spacing: .32em; font-size: 12px; }
+  .brand b { color: var(--ac); }
+  .shot { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border: 1px solid var(--line2); border-radius: 999px; }
+  .shot .num { color: var(--ac); }
+  .menus { display: flex; gap: 16px; color: var(--tx2); }
+  .spacer { flex: 1; }
+  .transport { display: flex; align-items: center; gap: 6px; }
+  .tbtn { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line2); }
+  .tbtn.play { width: 42px; height: 42px; background: var(--ac); border: 0; }
+  .tri { width: 0; height: 0; border-left: 9px solid currentColor; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+  .play .tri { border-left-color: #1a1205; border-left-width: 12px; border-top-width: 8px; border-bottom-width: 8px; margin-left: 4px; }
+  .tc { font-family: var(--mono); font-size: 20px; letter-spacing: .04em; margin-left: 10px; }
+  .tc em { color: var(--tx3); font-style: normal; font-size: 13px; }
+  .pillgroup { display: flex; gap: 6px; }
+  .pill { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line2); color: var(--tx2); }
+  .pill.on { background: var(--ac2); border-color: var(--ac3); color: var(--ac); }
+
+  /* tool shelf */
+  .shelf { grid-column: 2 / 3; display: flex; align-items: center; gap: 4px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--s1); overflow: hidden; white-space: nowrap; }
+  .t { display: flex; align-items: center; gap: 7px; padding: 5px 10px 5px 6px; border-radius: 8px; color: var(--tx2); cursor: pointer; }
+  .t b { width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; font-family: var(--mono); font-size: 11px; background: var(--s3); color: var(--tx); }
+  .t:hover { background: var(--s2); }
+  .t.on { background: var(--ac); color: #1a1205; } .t.on b { background: #1a12051f; color: #1a1205; }
+  .shelf .sep { width: 1px; height: 20px; background: var(--line2); margin: 0 6px; }
+
+  /* left */
+  .left { grid-row: 2 / 4; border-right: 1px solid var(--line); background: var(--s1); display: flex; flex-direction: column; min-height: 0; }
+  .lsec { padding: 16px 16px 12px; }
+  .lsec .cap { margin-bottom: 12px; display: flex; justify-content: space-between; }
+  .shotrow { display: grid; grid-template-columns: 56px 1fr; gap: 10px; align-items: center; padding: 6px; border-radius: 10px; margin-bottom: 4px; }
+  .shotrow.on { background: var(--s3); box-shadow: inset 0 0 0 1px var(--line2); }
+  .shotrow .th { height: 36px; border-radius: 6px; background: #fff; overflow: hidden; position: relative; }
+  .shotrow .th .vx-art { position: absolute; height: 120%; left: 30%; top: 2%; }
+  .shotrow b { font-weight: 500; display: block; } .shotrow small { color: var(--tx3); font-family: var(--mono); font-size: 10.5px; }
+  .lib { flex: 1; overflow: auto; padding: 0 16px 16px; }
+  .sym { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; padding: 7px 4px; border-bottom: 1px solid var(--line); }
+  .sym i { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; font-style: normal; font-family: var(--mono); font-size: 10px; font-weight: 600; }
+  .sym small { color: var(--tx3); font-family: var(--mono); font-size: 10.5px; }
+  .folder { color: var(--tx2); padding: 7px 4px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
+  .folder::before { content: ''; width: 12px; height: 9px; border: 1.5px solid var(--tx3); border-radius: 2px; margin-top: 3px; }
+
+  /* stage */
+  .stage { position: relative; overflow: hidden; background: #0c1222; }
+  .board { position: absolute; left: 50%; top: 50%; width: min(80%, 940px); aspect-ratio: 16/9; transform: translate(-50%, -50%); background: #fbf7ee; border-radius: 3px; box-shadow: 0 40px 80px -30px #000, 0 0 0 1px #00000040; overflow: hidden; }
+  .safe { position: absolute; inset: 7%; border: 1px dashed #0000001c; }
+  .figure { position: absolute; left: 40%; top: 6%; height: 92%; aspect-ratio: 360/480; }
+  .figure > div { position: absolute; inset: 0; } .figure .vx-art { width: 100%; height: 100%; }
+  .ghost { opacity: .5; }
+  .stage-hud { position: absolute; left: 16px; bottom: 14px; display: flex; gap: 8px; }
+  .hud { padding: 5px 10px; border-radius: 7px; background: #0a0f1dcc; border: 1px solid var(--line2); color: var(--tx2); font-family: var(--mono); font-size: 11px; }
+  .hud b { color: var(--tx); font-weight: 500; }
+  .legend { position: absolute; right: 16px; bottom: 14px; display: flex; gap: 12px; color: var(--tx2); font-size: 11.5px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+  /* right */
+  .right { grid-row: 2 / 4; grid-column: 3; border-left: 1px solid var(--line); background: var(--s1); overflow: auto; }
+  .rsec { padding: 16px 16px; border-bottom: 1px solid var(--line); }
+  .rsec .cap { margin-bottom: 14px; display: flex; justify-content: space-between; }
+  .rsec .cap em { font-style: normal; color: var(--ac); letter-spacing: .06em; }
+  .knobs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .knob { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .knob .k { width: 56px; height: 56px; border-radius: 50%; background: conic-gradient(var(--ac) 0 var(--v), var(--s4) var(--v) 75%, transparent 75%); transform: rotate(-135deg); position: relative; }
+  .knob .k::after { content: ''; position: absolute; inset: 5px; border-radius: 50%; background: var(--s2); }
+  .knob .vv { font-family: var(--mono); font-size: 13px; margin-top: -42px; margin-bottom: 20px; position: relative; }
+  .knob small { color: var(--tx3); font-size: 11px; }
+  .brushcard { border-radius: 12px; background: var(--s2); border: 1px solid var(--line2); padding: 12px; margin-bottom: 10px; }
+  .brushcard .bn { display: flex; justify-content: space-between; margin-bottom: 8px; }
+  .brushcard .bn b { font-weight: 600; } .brushcard .bn small { color: var(--tx3); font-family: var(--mono); font-size: 10.5px; }
+  .brushcard svg { width: 100%; height: 40px; display: block; }
+  .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .opt { padding: 8px 10px; border-radius: 8px; background: var(--s2); border: 1px solid var(--line); color: var(--tx2); display: flex; justify-content: space-between; }
+  .opt b { color: var(--tx); font-weight: 500; }
+  .opt.on { border-color: var(--ac3); color: var(--ac); }
+  .pal { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
+  .pal i { aspect-ratio: 1; border-radius: 50%; display: block; box-shadow: inset 0 0 0 1px #ffffff1a; }
+  .pal i.on { box-shadow: 0 0 0 2px var(--s1), 0 0 0 3.5px var(--ac); }
+
+  /* exposure */
+  .expo { grid-column: 1 / -1; border-top: 1px solid var(--line); background: var(--s1); display: grid; grid-template-rows: 112px 30px 1fr; min-height: 0; }
+  .strip { display: grid; grid-template-columns: 250px 1fr; border-bottom: 1px solid var(--line); }
+  .strip .info { padding: 14px 16px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
+  .strip .info b { font-size: 15px; font-weight: 600; }
+  .strip .info .row2 { display: flex; gap: 6px; }
+  .cels { display: flex; gap: 8px; padding: 12px 14px; overflow: hidden; align-items: flex-end; }
+  .cel { flex: none; width: 92px; display: flex; flex-direction: column; gap: 5px; align-items: center; }
+  .cel .im { width: 92px; height: 66px; border-radius: 8px; background: #fbf7ee; position: relative; overflow: hidden; box-shadow: 0 0 0 1px var(--line2); }
+  .cel .im .vx-art { position: absolute; height: 210%; left: -6%; top: 6%; }
+  .cel span { font-family: var(--mono); font-size: 10.5px; color: var(--tx3); }
+  .cel.prev .im { box-shadow: 0 0 0 2px var(--prev); } .cel.prev span { color: var(--prev); }
+  .cel.next .im { box-shadow: 0 0 0 2px var(--next); } .cel.next span { color: var(--next); }
+  .cel.cur .im { box-shadow: 0 0 0 3px var(--ac); width: 104px; height: 76px; } .cel.cur { width: 104px; } .cel.cur span { color: var(--ac); font-weight: 600; }
+  .cel.add .im { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line2); display: grid; place-items: center; color: var(--tx3); font-size: 22px; }
+  .xhead { display: grid; grid-template-columns: 250px 1fr; border-bottom: 1px solid var(--line); }
+  .xhead .l { padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-right: 1px solid var(--line); }
+  .xruler { position: relative; overflow: hidden; }
+  .xruler span { position: absolute; top: 8px; font-family: var(--mono); font-size: 10px; color: var(--tx3); transform: translateX(-50%); }
+  .xruler span.sec { color: var(--tx2); }
+  .xbody { display: grid; grid-template-columns: 250px 1fr; overflow: hidden; }
+  .xnames { border-right: 1px solid var(--line); }
+  .xn { height: 26px; display: flex; align-items: center; gap: 10px; padding: 0 16px; color: var(--tx2); border-bottom: 1px solid #ffffff05; }
+  .xn.on { color: var(--tx); background: var(--ac2); }
+  .xn i { width: 3px; height: 14px; border-radius: 2px; }
+  .xn small { margin-left: auto; color: var(--tx3); font-family: var(--mono); font-size: 10px; }
+  .xtracks { position: relative; overflow: hidden; }
+  .xt { height: 26px; position: relative; border-bottom: 1px solid #ffffff05; }
+  .blk { position: absolute; top: 4px; height: 18px; border-radius: 5px; background: var(--s4); color: var(--tx2); font-family: var(--mono); font-size: 10px; display: flex; align-items: center; padding-left: 6px; overflow: hidden; box-shadow: inset 0 0 0 1px #ffffff0d; }
+  .xt.on .blk { background: #3b3220; color: var(--ac); box-shadow: inset 0 0 0 1px var(--ac3); }
+  .blk.tw { background: repeating-linear-gradient(-45deg, #2e2a55, #2e2a55 5px, #343066 5px, #343066 10px); color: #b8b0ff; }
+  .blk.sh { background: repeating-linear-gradient(-45deg, #173e3a, #173e3a 5px, #1b4844 5px, #1b4844 10px); color: #7fe3c8; }
+  .xph { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ac); box-shadow: 0 0 12px var(--ac); }
+  .grid5 { position: absolute; top: 0; bottom: 0; width: 1px; background: #ffffff08; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">VERTE<b>X</b>A</div>
+    <div class="shot"><span class="cap" style="letter-spacing:.1em">Shot</span><span class="num">012</span><span>pico_sing</span></div>
+    <nav class="menus"><span>File</span><span>Edit</span><span>View</span><span>Draw</span><span>Animate</span><span>Window</span></nav>
+    <div class="spacer"></div>
+    <div class="transport">
+      <div class="tbtn"><i class="tri" style="transform:scaleX(-1)"></i></div>
+      <div class="tbtn play"><i class="tri"></i></div>
+      <div class="tbtn"><i class="tri"></i></div>
+      <div class="tc">00:00:<b>09</b> <em>/ 01:00 · 24 fps</em></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="pillgroup"><span class="pill on">Light table</span><span class="pill">On twos</span><span class="pill">Loop</span></div>
+  </header>
+
+  <aside class="left">
+    <div class="lsec">
+      <div class="cap"><span>Shots</span><span>4</span></div>
+      <div class="shotrow"><div class="th"><div data-art="main"></div></div><div><b>011 · idle</b><small>14 fr · 0.58 s</small></div></div>
+      <div class="shotrow on"><div class="th"><div data-art="main"></div></div><div><b>012 · singLEFT</b><small>24 fr · 1.00 s</small></div></div>
+      <div class="shotrow"><div class="th"><div data-art="main"></div></div><div><b>013 · singDOWN</b><small>22 fr · 0.92 s</small></div></div>
+      <div class="shotrow"><div class="th"><div data-art="main"></div></div><div><b>014 · singUP</b><small>20 fr · 0.83 s</small></div></div>
+    </div>
+    <div class="lsec" style="padding-bottom:4px"><div class="cap"><span>Library</span><span>9 items</span></div></div>
+    <div class="lib" id="lib"></div>
+  </aside>
+
+  <div class="shelf" id="shelf"></div>
+
+  <main class="stage">
+    <div class="board">
+      <div class="safe"></div>
+      <div class="figure">
+        <div class="ghost" data-art="ghost:#ff7a6b:-22:6:-3"></div>
+        <div class="ghost" data-art="ghost:#ff7a6b:-11:3:-1.5" style="opacity:.3"></div>
+        <div class="ghost" data-art="ghost:#29b9c0:10:-2:1.5"></div>
+        <div data-art="main"></div>
+      </div>
+    </div>
+    <div class="stage-hud"><span class="hud">ZOOM <b>100%</b></span><span class="hud">ROT <b>0°</b></span><span class="hud">X <b>812</b> Y <b>344</b></span></div>
+    <div class="legend"><span><i style="background:var(--prev)"></i>−2 −1</span><span><i style="background:var(--next)"></i>+1</span></div>
+  </main>
+
+  <aside class="right">
+    <div class="rsec">
+      <div class="cap"><span>Brush</span><em>B</em></div>
+      <div class="brushcard">
+        <div class="bn"><b>Flash Classic</b><small>vector · fill</small></div>
+        <svg viewBox="0 0 250 40" preserveAspectRatio="none"><path d="M6 30 C 50 4, 110 4, 150 18 S 220 34, 246 10 C 222 30, 180 30, 148 22 S 60 10, 6 30 Z" fill="#f3ecdc"/></svg>
+      </div>
+      <div class="knobs">
+        <div class="knob"><div class="k" style="--v:24%"></div><div class="vv">14</div><small>Size</small></div>
+        <div class="knob"><div class="k" style="--v:38%"></div><div class="vv">50</div><small>Smooth</small></div>
+        <div class="knob"><div class="k" style="--v:56%"></div><div class="vv">0.7</div><small>Pressure</small></div>
+      </div>
+    </div>
+    <div class="rsec">
+      <div class="cap"><span>Behaviour</span></div>
+      <div class="opts">
+        <div class="opt on"><span>Paint</span><b>Normal</b></div>
+        <div class="opt"><span>Tip</span><b>Round</b></div>
+        <div class="opt on"><span>Merge</span><b>Object</b></div>
+        <div class="opt"><span>Taper</span><b>End</b></div>
+        <div class="opt"><span>Tilt</span><b>Off</b></div>
+        <div class="opt"><span>Zoom-relative</span><b>On</b></div>
+      </div>
+    </div>
+    <div class="rsec">
+      <div class="cap"><span>Palette</span><span>pico.cls</span></div>
+      <div class="pal" id="pal"></div>
+    </div>
+  </aside>
+
+  <section class="expo">
+    <div class="strip">
+      <div class="info">
+        <span class="cap">Layer drawings</span>
+        <b>Arm L</b>
+        <div class="row2"><span class="pill on" style="padding:4px 10px">Drawing 5</span><span class="pill" style="padding:4px 10px">Held 2 fr</span></div>
+      </div>
+      <div class="cels" id="cels"></div>
+    </div>
+    <div class="xhead">
+      <div class="l"><span class="cap">Exposure</span><span class="cap" style="color:var(--tx2)">+ layer</span></div>
+      <div class="xruler" id="xruler"></div>
+    </div>
+    <div class="xbody">
+      <div class="xnames" id="xnames"></div>
+      <div class="xtracks" id="xtracks"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // shelf
+  const shelf = document.getElementById('shelf');
+  const grp = [['V', 'A', 'Q', 'L'], ['B', 'Y', 'P', 'E'], ['N', 'R', 'O', 'T'], ['K', 'S', 'I'], ['M', 'H', 'Z']];
+  grp.forEach((g, gi) => { g.forEach(k => { const t = VX.tools.find(x => x.k === k); shelf.append(VX.h(`<div class="t ${k === 'B' ? 'on' : ''}"><b>${k}</b>${t.n}</div>`)); }); if (gi < grp.length - 1) shelf.append(VX.h('<span class="sep"></span>')); });
+  shelf.addEventListener('click', e => { const t = e.target.closest('.t'); if (!t) return; shelf.querySelectorAll('.t').forEach(x => x.classList.remove('on')); t.classList.add('on'); });
+
+  // library
+  const tcol = { 'Graphic': ['#46c2ff22', '#7fd3ff', 'GR'], 'Movie Clip': ['#8b7bff22', '#b3a8ff', 'MC'], 'Button': ['#ffb54722', '#ffb547', 'BT'], 'Bitmap': ['#3ddc9722', '#7fe3c8', 'BM'] };
+  document.getElementById('lib').innerHTML = VX.libraryFolders.map(f => `<div class="folder">${f}</div>`).join('') +
+    VX.library.map(s => { const c = tcol[s.t]; return `<div class="sym"><i style="background:${c[0]};color:${c[1]}">${c[2]}</i><div>${s.n}<br><small>${s.t}</small></div><small>×${s.uses}</small></div>`; }).join('');
+
+  // palette
+  document.getElementById('pal').innerHTML = VX.swatches.map((c, i) => `<i style="background:${c}" class="${i === 4 ? 'on' : ''}"></i>`).join('');
+
+  // cels (drawings of the active layer)
+  const cur = 5;
+  let cels = '';
+  for (let d = 1; d <= 9; d++) {
+    const cls = d === cur ? 'cur' : d === cur - 1 || d === cur - 2 ? 'prev' : d === cur + 1 ? 'next' : '';
+    cels += `<div class="cel ${cls}"><div class="im"><div style="position:absolute;inset:0;transform:rotate(${(d - 5) * 2}deg) translateX(${(d - 5) * 2}px)">${VX.art()}</div></div><span>${String(d).padStart(2, '0')} · fr ${d * 2 - 1}</span></div>`;
+  }
+  cels += `<div class="cel add"><div class="im">+</div><span>new</span></div>`;
+  document.getElementById('cels').innerHTML = cels;
+
+  // exposure
+  const W = 26, N = 48, x = f => (f - 1) * W;
+  let ru = ''; for (let f = 1; f <= N; f++) if (f === 1 || f % 4 === 1) ru += `<span class="${(f - 1) % 24 === 0 ? 'sec' : ''}" style="left:${x(f) + W / 2}px">${f}</span>`;
+  document.getElementById('xruler').innerHTML = ru + `<span style="left:${x(VX.doc.frame) + W / 2}px;color:var(--ac);font-weight:600;top:7px;background:var(--s1);padding:0 4px">${VX.doc.frame}</span>`;
+  document.getElementById('xnames').innerHTML = VX.layers.map(l => `<div class="xn ${l.active ? 'on' : ''}"><i style="background:${l.color}"></i>${l.name}<small>${l.keys.length} dr</small></div>`).join('');
+  let tr = ''; for (let f = 1; f <= N; f++) if (f % 4 === 1) tr += `<div class="grid5" style="left:${x(f)}px"></div>`;
+  VX.layers.forEach(l => {
+    let r = `<div class="xt ${l.active ? 'on' : ''}">`;
+    const keys = l.keys.concat([l.len + 1]);
+    for (let i = 0; i < keys.length - 1; i++) {
+      const a = keys[i], b = keys[i + 1], t = (l.tw || []).find(q => q[0] === a);
+      r += `<div class="blk ${t ? (t[2] === 'classic' ? 'tw' : 'sh') : ''}" style="left:${x(a) + 2}px;width:${(b - a) * W - 4}px">${t ? (t[2] === 'classic' ? 'tween' : 'shape') : i + 1}</div>`;
+    }
+    tr += r + '</div>';
+  });
+  tr += `<div class="xph" style="left:${x(VX.doc.frame) + W / 2 - 1}px"></div>`;
+  document.getElementById('xtracks').innerHTML = tr;
+</script>
+</body>
+</html>
