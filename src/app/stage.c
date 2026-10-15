@@ -144,16 +144,19 @@ static BrushOpts opts_for(char tool) {
     o.curve = app.curve;
     o.aspect = 1;
     if (tool == 'E') {
-        o.size = app.eraser_size * su; o.smoothing = 25; o.tip = TIP_ROUND; o.erase = 1; o.color = 0xffffffff;
+        o.size = app.eraser_size * su; o.smoothing = o.fit = 25; o.tip = TIP_ROUND; o.erase = 1; o.color = 0xffffffff;
     } else if (tool == 'Y') {
         static const float sm[] = {75, 55, 10};
-        o.size = app.pencil_size * su; o.smoothing = sm[app.pencil_mode]; o.tip = TIP_ROUND; o.color = app.stroke;
+        o.size = app.pencil_size * su; o.smoothing = o.fit = sm[app.pencil_mode]; o.tip = TIP_ROUND; o.color = app.stroke;
     } else {
         o.size = app.brush_size * su; o.smoothing = app.brush_smooth;
         o.pressure = app.brush_pressure; o.tilt = app.brush_tilt;
         o.tip = app.tip; o.angle = app.tip_angle * VX_PI / 180; o.aspect = app.tip == TIP_OVAL ? app.tip_aspect : 1;
-        o.taper = app.taper;
-        o.color = col_alpha(app.fill, app.alpha);
+        o.taper_s = app.taper_s * 0.09f; o.taper_e = app.taper_e * 0.09f;
+        o.fit = app.brush_fit;
+        o.tex = app.texture[0] ? texture_bitmap(app.texture) : 0;
+        o.tex_density = app.tex_density / 100; o.tex_scale = app.tex_scale / 100;
+        o.color = col_alpha(app.fill, app.alpha * app.brush_opacity / 100);
     }
     return o;
 }
@@ -573,7 +576,8 @@ void stage_render(void) {
 /* ── demo content (used for screenshots and as a quick self-test) ── */
 
 static void demo_stroke(Doc *d, Layer *l, int f, const float (*pts)[3], int n, float size, Color c, u8 taper, u8 tip, float angle) {
-    BrushOpts o = {.size = size, .smoothing = 45, .pressure = true, .curve = {3, {0, 0.46f, 1}, {0.12f, 0.48f, 1}}, .tip = tip, .angle = angle, .aspect = 0.38f, .taper = taper, .color = c, .unit = 1};
+    BrushOpts o = {.size = size, .smoothing = 45, .pressure = true, .curve = {3, {0, 0.46f, 1}, {0.12f, 0.48f, 1}}, .tip = tip, .angle = angle, .aspect = 0.38f,
+                   .taper_s = taper & TAPER_START ? 4.5f : 0, .taper_e = taper & TAPER_END ? 4.5f : 0, .fit = 45, .color = c, .unit = 1};
     Builder b;
     bb_begin(&b, o);
     for (int i = 0; i < n - 1; i++) {

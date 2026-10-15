@@ -7,7 +7,8 @@ typedef struct { float x, y, u, v; Color col; float p[4]; float k[4]; } Vtx;
 
 enum { K_SOLID, K_GLYPH, K_IMAGE, K_RRECT, K_RING, K_SV, K_CAPSULE, K_CHECKER, K_SHADOW, K_STRIPES,   // K_STRIPES: k1 = period in px
        K_GRADIENT,   // uv = gradient space (-1..1); p.x radial, p.y spread (0 pad, 1 reflect, 2 repeat); tex = 256 x 1 ramp
-       K_IMAGE_FX }; // image * colour (rgb multipliers, alpha) + p.rgb * its alpha (colour effect offsets)
+       K_IMAGE_FX,   // image * colour (rgb multipliers, alpha) + p.rgb * its alpha (colour effect offsets)
+       K_GRAIN };    // colour with a texture's grain: alpha * lerp(1, the texture's lightness over white, p.x)
 // pipeline variant a draw command uses (stage passes use the stencil ones)
 // group compositing (premultiplied): MULTIPLY then MULTIPLY2 is an exact multiply in two draws, COPY
 // overwrites, COMPOSITE runs the blend shader on tex (the group) and tex2 (a copy of the backdrop)

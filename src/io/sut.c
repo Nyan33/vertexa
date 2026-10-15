@@ -161,7 +161,9 @@ static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx)
         float rot = num(&r, "BrushRotation", 0) + (num(&r, "BrushVerticalThicknes", 0) != 0 ? 90 : 0);
         p->angle = roundf(fmodf(fmodf(rot, 180) + 180, 180));
         bool in = num(&r, "BrushUseIn", 0) != 0, out = num(&r, "BrushUseOut", 0) != 0;
-        p->taper = (u8)((in ? TAPER_START : 0) | (out ? TAPER_END : 0));
+        p->taper_s = in ? 50 : 0; p->taper_e = out ? 50 : 0;
+        p->opacity = clampf(roundf(num(&r, "Opacity", 100)), 1, 100);
+        p->fit = p->smoothing; p->tex_density = 60; p->tex_scale = 100;
         // what a solid vector tip cannot reproduce yet
         if (num(&r, "BrushUsePatternImage", 0) != 0 && blob(&r, "BrushPatternImageArray", &len) && len > 0) *approx |= 1;
         if (has(&r, "TextureImage") && blob(&r, "TextureImage", &len) && len > 0) *approx |= 2;

@@ -53,7 +53,8 @@ typedef struct {
     SPt *pts;                // stroke centerline (stb_ds)
     V2 *poly;                // fill contours, concatenated (stb_ds)
     int *starts;             // fill contour start indices (stb_ds)
-    int sym, first;          // instance: symbol id, first frame; bitmap: bitmap id; fill: a bitmap to fill with
+    int sym, first;          // instance: symbol id, first frame; bitmap: bitmap id; fill: a bitmap to fill with;
+                             // stroke with texture set: the texture's bitmap (alpha = grain density, m = its scale)
     Mat m;                   // instance / bitmap placement; fill: bitmap or gradient matrix
     float alpha;             // instance color effect
     ColorFx cx;              // instance colour effect (brightness, tint, advanced)

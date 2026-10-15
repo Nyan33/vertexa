@@ -9,25 +9,34 @@
 App app;
 
 #define C3(y0, hx, hy, y1) {3, {0, hx, 1}, {y0, hy, y1}}
+// name, size, smoothing, pressure curve, tip, angle, roundness, taper start / end %, opacity %, curve fit,
+// texture, its density % and scale %
 static const BrushPreset BUILTIN[] = {
-    {"Flash Classic", 14, 50, C3(0.25f, 0.475f, 0.52f, 1), TIP_ROUND, 0, 1, TAPER_NONE},
-    {"Animate Fluid", 16, 60, C3(0.04f, 0.45f, 0.40f, 1), TIP_ROUND, 0, 1, TAPER_END},
-    {"Taper Ink", 10, 55, C3(0.0f, 0.425f, 0.525f, 1), TIP_ROUND, 0, 1, TAPER_BOTH},
-    {"G-Pen", 9, 40, C3(0.08f, 0.475f, 0.445f, 1), TIP_OVAL, 35, 0.38f, TAPER_BOTH},
-    {"Marker", 24, 30, C3(0.85f, 0.50f, 0.92f, 1), TIP_SQUARE, 20, 1, TAPER_NONE},
-    {"Sketch", 4, 20, C3(0.35f, 0.50f, 0.64f, 1), TIP_ROUND, 0, 1, TAPER_NONE},
+    {"Flash Classic", 14, 50, C3(0.25f, 0.475f, 0.52f, 1), TIP_ROUND, 0, 1, 0, 0, 100, 50, "", 60, 100},
+    {"Animate Fluid", 16, 60, C3(0.04f, 0.45f, 0.40f, 1), TIP_ROUND, 0, 1, 0, 50, 100, 60, "", 60, 100},
+    {"Taper Ink", 10, 55, C3(0.0f, 0.425f, 0.525f, 1), TIP_ROUND, 0, 1, 50, 50, 100, 55, "", 60, 100},
+    {"G-Pen", 9, 40, C3(0.08f, 0.475f, 0.445f, 1), TIP_OVAL, 35, 0.38f, 50, 50, 100, 40, "", 60, 100},
+    {"Marker", 24, 30, C3(0.85f, 0.50f, 0.92f, 1), TIP_SQUARE, 20, 1, 0, 0, 100, 30, "", 60, 100},
+    {"Sketch", 4, 20, C3(0.35f, 0.50f, 0.64f, 1), TIP_ROUND, 0, 1, 0, 0, 100, 20, "", 60, 100},
+    {"Pencil", 5, 25, C3(0.3f, 0.5f, 0.62f, 1), TIP_ROUND, 0, 1, 20, 30, 90, 25, "Pencil", 75, 60},
+    {"Chalk", 18, 30, C3(0.5f, 0.5f, 0.75f, 1), TIP_ROUND, 0, 1, 0, 10, 100, 30, "Chalk", 85, 100},
+    {"Wash", 30, 55, C3(0.4f, 0.5f, 0.7f, 1), TIP_OVAL, 30, 0.7f, 30, 40, 55, 55, "Watercolor", 55, 150},
 };
 #undef C3
 
 /* brushes: %APPDATA%/Vertexa/brushes.txt keeps the whole list in order. A built-in is a line "@Name",
    the user's brushes are one tab-separated line each; an exported brush (.vxbrush) is the same line */
 
+// the old taper field (1 start, 2 end) stays for earlier builds; what came later is key=value after a tab,
+// then the texture's name after another
 static void preset_line(FILE *f, const BrushPreset *p) {
-    fprintf(f, "%s\t%g %g %d %g %g %d |", p->name, p->size, p->smoothing, p->tip, p->angle, p->aspect, p->taper);
+    int taper = (p->taper_s > 0 ? TAPER_START : 0) | (p->taper_e > 0 ? TAPER_END : 0);
+    fprintf(f, "%s\t%g %g %d %g %g %d |", p->name, p->size, p->smoothing, p->tip, p->angle, p->aspect, taper);
     for (int k = 0; k < p->curve.n; k++) fprintf(f, " %g,%g", p->curve.x[k], p->curve.y[k]);
-    fprintf(f, "\n");
+    fprintf(f, "\topacity=%g fit=%g taper_start=%g taper_end=%g density=%g scale=%g\t%s\n",
+            p->opacity, p->fit, p->taper_s, p->taper_e, p->tex_density, p->tex_scale, p->texture);
 }
-#define PRESET_HEADER "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y\n"
+#define PRESET_HEADER "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y<TAB>key=value ...<TAB>texture\n"
 
 void app_presets_save(void) {
     char path[1024];
@@ -49,6 +58,8 @@ static bool parse_preset(char *line, BrushPreset *p) {
     *tab = 0;
     memset(p, 0, sizeof(*p));
     p->user = true;
+    char *ext = strchr(tab + 1, '\t'), *tex = NULL;
+    if (ext) { *ext++ = 0; tex = strchr(ext, '\t'); if (tex) *tex++ = 0; }
     int tip = 0, taper = 0;
     char *bar = strchr(tab + 1, '|');
     if (bar) {
@@ -69,8 +80,21 @@ static bool parse_preset(char *line, BrushPreset *p) {
     }
     snprintf(p->name, sizeof(p->name), "%s", line);
     p->size = clampf(p->size, 1, 100); p->smoothing = clampf(p->smoothing, 0, 100);
-    p->tip = (u8)CLAMP(tip, 0, TIP_SQUARE); p->taper = (u8)CLAMP(taper, 0, TAPER_BOTH);
+    p->tip = (u8)CLAMP(tip, 0, TIP_SQUARE);
     p->aspect = clampf(p->aspect, 0.05f, 1);
+    p->taper_s = taper & TAPER_START ? 50 : 0; p->taper_e = taper & TAPER_END ? 50 : 0;
+    p->opacity = 100; p->fit = p->smoothing; p->tex_density = 60; p->tex_scale = 100;
+    for (char *t = ext ? strtok(ext, " \r\n") : NULL; t; t = strtok(NULL, " \r\n")) {
+        char key[32]; float v;
+        if (sscanf(t, "%31[^=]=%f", key, &v) != 2) continue;
+        if (!strcmp(key, "opacity")) p->opacity = clampf(v, 1, 100);
+        else if (!strcmp(key, "fit")) p->fit = clampf(v, 0, 100);
+        else if (!strcmp(key, "taper_start")) p->taper_s = clampf(v, 0, 100);
+        else if (!strcmp(key, "taper_end")) p->taper_e = clampf(v, 0, 100);
+        else if (!strcmp(key, "density")) p->tex_density = clampf(v, 0, 100);
+        else if (!strcmp(key, "scale")) p->tex_scale = clampf(v, 10, 400);
+    }
+    if (tex) { tex[strcspn(tex, "\r\n")] = 0; snprintf(p->texture, sizeof(p->texture), "%s", tex); }
     return true;
 }
 
@@ -200,7 +224,10 @@ void app_apply_preset(int i) {
     app.preset = i;
     app.brush_size = p->size; app.brush_smooth = p->smoothing;
     app.curve = p->curve;
-    app.tip = p->tip; app.tip_angle = p->angle; app.tip_aspect = p->aspect; app.taper = p->taper;
+    app.tip = p->tip; app.tip_angle = p->angle; app.tip_aspect = p->aspect;
+    app.taper_s = p->taper_s; app.taper_e = p->taper_e; app.brush_opacity = p->opacity; app.brush_fit = p->fit;
+    snprintf(app.texture, sizeof(app.texture), "%s", p->texture);
+    app.tex_density = p->tex_density; app.tex_scale = p->tex_scale;
 }
 
 void app_init(void) {

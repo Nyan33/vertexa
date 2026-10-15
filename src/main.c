@@ -184,10 +184,35 @@ static void selftest_brushes(int f) {
         drag_screen(f, 4, 6, v2(ui.w - 260, 446), v2(ui.w - 260, 540));
         if (f == 12) vx_log("selftest: order %s, %s, %s; current %d", app.presets[0].name, app.presets[1].name, app.presets[2].name, app.preset);
         if (f == 13) in_move(v2(ui.w - 200, 482));
-    } else if (M.page == 1 || M.page == 3) {
+    } else if (M.page == 1) {
         if (f == 3) brush_new();
-        if (M.page == 3) click_at(f, 6, v2(ui.w - 150, 914));   // Delete Brush: asks first
         if (f == 6) vx_log("selftest: new brush \"%s\" (%d brushes), editing %d", app.presets[app.preset].name, (int)arrlen(app.presets), brush_editing());
+    } else if (M.page == 4) {   // --selftest=texture: Pencil, Chalk and Wash strokes, saved and read back
+        static const char *names[] = {"Pencil", "Chalk", "Wash"};
+        static const char *vxa = "D:/Programming/Vertexa/research/tmp/texture_test.vxa";
+        for (int k = 0; k < 3; k++) {
+            if (f == 3 + k * 12) {
+                for (ptrdiff_t q = 0; q < arrlen(app.presets); q++) if (!strcmp(app.presets[q].name, names[k])) app_apply_preset((int)q);
+                app.fill = hex(k == 2 ? 0x2f6fdb : 0x141414);
+                if (k == 0) in_key(SAPP_KEYCODE_B, 0);
+                if (k == 0) app.brush_size = 14;
+            }
+            drag_line(f, 5 + k * 12, 8, v2(260, 200 + k * 160), v2(1000, 260 + k * 160));
+        }
+        if (f == 40) {
+            Drawing *dr = st_drawing(false);
+            for (ptrdiff_t q = 0; dr && q < arrlen(dr->items); q++) { Item *it = &dr->items[q]; vx_log("selftest: stroke %d: texture %d bitmap %d density %.2f", (int)q, it->texture, it->sym, it->alpha); }
+            vx_log("selftest: save %s", doc_save(app.doc, vxa) ? "ok" : "FAILED");
+        }
+        if (f == 42) {
+            bool ok = app_open_path(vxa);
+            Drawing *dr = st_drawing(false);
+            int tex = 0;
+            for (ptrdiff_t q = 0; dr && q < arrlen(dr->items); q++) tex += dr->items[q].texture && bitmap_get(dr->items[q].sym) != NULL;
+            vx_log("selftest: reopen %s, textured strokes %d", ok ? "ok" : "FAILED", tex);
+        }
+        if (f == 44) brush_new();
+        if (f == 46) { in_move(v2(ui.w - 150, 700)); ui.in.wheel_y = -12; }   // the editor scrolled to its lower blocks
     } else {
         if (f == 3) { app.fill = hex(0x141414); app.brush_size = 12; in_key(SAPP_KEYCODE_B, 0); }
         drag_line(f, 5, 8, v2(300, 300), v2(900, 360));
@@ -672,7 +697,7 @@ static void frame(void) {
     else if (M.selftest && M.variant == 18) selftest_shape(M.frames);
     else if (M.selftest && M.variant == 19) selftest_brushes(M.frames);
     else if (M.selftest && M.variant == 13) {   // --selftest=curve: a point added to the pressure curve, then removed
-        V2 add = {ui.w - 80, 850};
+        V2 add = {ui.w - 80, 800};
         if (M.frames == 2) brush_new();   // the curve is in a brush's settings
         if (M.frames == 4) vx_log("selftest: curve points %d", app.curve.n);
         click_at(M.frames, 6, add);
@@ -889,7 +914,7 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         else if (!strcmp(argv[i], "--selftest=export-window")) { M.selftest = true; M.variant = 14; M.page = 1; M.capture_frame = 80; }
         else if (!strcmp(argv[i], "--selftest=brushes")) { M.selftest = true; M.variant = 19; M.capture_frame = 16; }
         else if (!strcmp(argv[i], "--selftest=brush-edit")) { M.selftest = true; M.variant = 19; M.page = 1; M.capture_frame = 10; }
-        else if (!strcmp(argv[i], "--selftest=brush-delete")) { M.selftest = true; M.variant = 19; M.page = 3; M.capture_frame = 12; }
+        else if (!strcmp(argv[i], "--selftest=texture")) { M.selftest = true; M.variant = 19; M.page = 4; M.capture_frame = 50; }
         else if (!strcmp(argv[i], "--selftest=recolor")) { M.selftest = true; M.variant = 19; M.page = 2; M.capture_frame = 30; }
         else if (!strcmp(argv[i], "--selftest=shape")) { M.selftest = true; M.variant = 18; M.capture_frame = 58; }
         else if (!strcmp(argv[i], "--selftest=shape-edit")) { M.selftest = true; M.variant = 18; M.page = 1; M.capture_frame = 70; }

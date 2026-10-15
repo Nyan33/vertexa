@@ -295,6 +295,23 @@ int plat_count_files(const char *dir, const char *pattern) {
     return n;
 }
 
+int plat_list_files(const char *dir, const char *pattern, char (*names)[128], int cap) {
+    char q[1100];
+    snprintf(q, sizeof(q), "%s/%s", dir, pattern);
+    wchar_t w[1100];
+    to_w(q, w, 1100);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(w, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    int n = 0;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY || n >= cap) continue;
+        if (WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, names[n], 128, NULL, NULL) > 0) n++;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return n;
+}
+
 char **plat_argv_utf8(int *argc) {
     int n = 0;
     wchar_t **w = CommandLineToArgvW(GetCommandLineW(), &n);

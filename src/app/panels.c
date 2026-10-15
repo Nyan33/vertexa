@@ -223,20 +223,55 @@ void color_panel(Rect r) {
 
 /* ── brushes ── */
 
+// a stroke drawn with the preset, light, heavy, light: its outline from the size, pressure curve, tip and
+// tapers; with a texture, the grain shows through (a strip with soft one-pixel edges)
 static void ribbon(Rect r, const BrushPreset *p, Color c) {
-    V2 prev = {0}; float pw = 0;
-    for (int i = 0; i <= 32; i++) {
-        float t = i / 32.0f;
-        float pr = sinf(t * VX_PI);                         // a pressure stroke: light, heavy, light
+    enum { N = 40 };
+    V2 q[N + 1]; float hw[N + 1];
+    float ls = p->taper_s / 200, le = p->taper_e / 200;   // taper lengths as parts of the ribbon (100 % = half)
+    for (int i = 0; i <= N; i++) {
+        float t = (float)i / N;
+        float pr = sinf(t * VX_PI);
         float w = p->size * 0.22f * MAX(0.06f, curve_eval(&p->curve, pr));
-        if (p->taper == TAPER_START || p->taper == TAPER_BOTH) w *= MIN(1, t * 4);
-        if (p->taper == TAPER_END || p->taper == TAPER_BOTH) w *= MIN(1, (1 - t) * 4);
+        if (ls > 0) w *= MIN(1, t / ls);
+        if (le > 0) w *= MIN(1, (1 - t) / le);
         if (p->tip == TIP_OVAL) w *= 0.55f + 0.45f * fabsf(cosf(t * 2.2f + p->angle));
-        w = clampf(w, 0.6f, r.h * 0.42f);
-        V2 q = {r.x + 4 + t * (r.w - 8), r.y + r.h / 2 + sinf(t * VX_PI * 1.4f + p->angle) * 3};
-        if (i) dl_line(ui.dl, prev, q, (w + pw), c);
-        prev = q; pw = w;
+        hw[i] = clampf(w, 0.3f, r.h * 0.42f);
+        q[i] = v2(r.x + 4 + t * (r.w - 8), r.y + r.h / 2 + sinf(t * VX_PI * 1.4f + p->angle) * 3);
     }
+    c = col_alpha(c, p->opacity > 0 ? p->opacity / 100 : 1);
+    int bm = p->texture[0] ? texture_bitmap(p->texture) : 0;
+    Bitmap *b = bm ? bitmap_get(bm) : NULL;
+    u32 view = b ? bitmap_texture(bm) : 0;
+    if (!view) {
+        for (int i = 1; i <= N; i++) dl_line(ui.dl, q[i - 1], q[i], hw[i - 1] + hw[i], c);
+        return;
+    }
+    float s = ui.dl->scale, ts = MAX(0.1f, p->tex_scale / 100);
+    float prm[4] = {p->tex_density / 100, 0, 0, 0};
+    u32 old = ui.dl->tex;
+    dl_set_tex(ui.dl, view);
+    dl_set_sampler(ui.dl, SMP_REPEAT);
+    u32 v0 = 0;
+    for (int i = 0; i <= N; i++) {
+        V2 d = v2(q[MIN(i + 1, N)].x - q[MAX(i - 1, 0)].x, q[MIN(i + 1, N)].y - q[MAX(i - 1, 0)].y);
+        float L = MAX(1e-4f, hypotf(d.x, d.y));
+        V2 n = v2(-d.y / L, d.x / L);
+        static const float off[4] = {-1, -1, 1, 1}, grow[4] = {0.7f, -0.7f, -0.7f, 0.7f}, al[4] = {0, 1, 1, 0};
+        for (int k = 0; k < 4; k++) {
+            float o = off[k] * MAX(0, hw[i] + grow[k] / s);
+            V2 pp = v2(q[i].x + n.x * o, q[i].y + n.y * o);
+            u32 v = dl_vtx_uvp(ui.dl, pp.x * s, pp.y * s, pp.x / (b->w * ts), pp.y / (b->h * ts), col_alpha(c, al[k]), K_GRAIN, prm);
+            if (!i && !k) v0 = v;
+        }
+    }
+    for (int i = 0; i < N; i++)
+        for (int k = 0; k < 3; k++) {
+            u32 a = v0 + i * 4 + k, b2 = a + 1, c2 = a + 4, d2 = a + 5;
+            dl_idx(ui.dl, a, b2, d2); dl_idx(ui.dl, a, d2, c2);
+        }
+    dl_set_sampler(ui.dl, SMP_LINEAR);
+    dl_set_tex(ui.dl, old);
 }
 
 // pressure -> size: click adds a point, drag moves it, right-click / double-click or dragging it
@@ -329,11 +364,19 @@ static void brush_duplicate(int i) {
     app_apply_preset(app_insert_preset(i + 1, &p));
 }
 
+// the brush in use (app.*) written into a preset
+static void preset_from_app(BrushPreset *q) {
+    q->size = app.brush_size; q->smoothing = app.brush_smooth; q->curve = app.curve;
+    q->tip = app.tip; q->angle = app.tip_angle; q->aspect = app.tip_aspect;
+    q->taper_s = app.taper_s; q->taper_e = app.taper_e; q->opacity = app.brush_opacity; q->fit = app.brush_fit;
+    snprintf(q->texture, sizeof(q->texture), "%s", app.texture);
+    q->tex_density = app.tex_density; q->tex_scale = app.tex_scale;
+}
+
 void brush_new(void) {   // the brush in use as it is now, at the end of the list, opened for editing
     BrushPreset p = {0};
+    preset_from_app(&p);
     app_brush_name(p.name, sizeof(p.name), "New Brush");
-    p.size = app.brush_size; p.smoothing = app.brush_smooth; p.curve = app.curve;
-    p.tip = app.tip; p.angle = app.tip_angle; p.aspect = app.tip_aspect; p.taper = app.taper;
     int at = app_insert_preset((int)arrlen(app.presets), &p);
     app_apply_preset(at);
     app.right_tab = 0;
@@ -369,43 +412,94 @@ static void delete_popup(void) {
     ui_popup_end();
 }
 
-static void tip_settings(float x, float w, float *py) {
+/* ── the brush's settings, in blocks that fold ── */
+
+static void slider_row(const char *id, const char *label, float x, float w, float *y, float *v, float lo, float hi, const char *fmt) {
+    font_draw_in(ui.dl, F_UI, rect(x, *y, 76, 20), ALIGN_LEFT, label, C_TX3);
+    *v = roundf(ui_slider(ui_id(id), rect(x + 84, *y, w - 84 - 48, 20), *v, lo, hi));
+    char s[16]; snprintf(s, sizeof(s), fmt, (int)*v);
+    font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, *y, 44, 20), ALIGN_RIGHT, s, C_TX);
+    *y += 20;
+}
+
+// a block's title: a click folds it
+static bool block(const char *id, const char *title, float x, float w, float *y, bool *open) {
+    *y += 6;
+    dl_rect(ui.dl, rect(x - 16, *y, w + 32, 1), C_LINE);
+    Rect h = {x - 8, *y + 4, w + 16, 30};
+    UiResp re = ui_interact(ui_id(id), h);
+    if (re.hover) dl_rrect(ui.dl, h, 6, C_S2);
+    icon_draw(ui.dl, *open ? IC_CARET_DOWN : IC_CARET_RIGHT, v2(x + 5, h.y + 15), ICON_S, true, re.hover ? C_TX2 : C_TX3);
+    font_draw_in(ui.dl, F_UI_MED, rect(x + 18, h.y, w - 18, h.h), ALIGN_LEFT, title, *open || re.hover ? C_TX : C_TX2);
+    if (re.clicked) *open = !*open;
+    *y = h.y + h.h + (*open ? 10 : 4);
+    return *open;
+}
+
+static void shape_block(float x, float w, float *py) {
     float y = *py;
-    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Tip", C_TX3); y += 22;
+    slider_row("brush-size", "Size", x, w, &y, &app.brush_size, 1, 100, "%d");
+    y += 14;
     static const char *tips[] = {"Round", "Oval", "Square"};
-    u8 tip = (u8)ui_segmented(ui_id("tip"), rect(x, y, w, 30), tips, 3, app.tip); y += 30;
+    font_draw_in(ui.dl, F_UI, rect(x, y + 5, 76, 20), ALIGN_LEFT, "Tip", C_TX3);
+    u8 tip = (u8)ui_segmented(ui_id("tip"), rect(x + 84, y, w - 84, 30), tips, 3, app.tip); y += 30;
     if (tip == TIP_OVAL && app.tip != TIP_OVAL && app.tip_aspect > 0.95f) app.tip_aspect = 0.38f;
     app.tip = tip;
     if (app.tip != TIP_ROUND) {
         y += 12;
-        font_draw_in(ui.dl, F_UI, rect(x, y, 60, 20), ALIGN_LEFT, "Angle", C_TX3);
-        app.tip_angle = roundf(ui_slider(ui_id("tip-angle"), rect(x + 80, y, w - 80 - 48, 20), app.tip_angle, 0, 180));
-        char s[16]; snprintf(s, sizeof(s), "%d\xC2\xB0", (int)app.tip_angle);
-        font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, y, 44, 20), ALIGN_RIGHT, s, C_TX);
-        y += 20;
+        slider_row("tip-angle", "Angle", x, w, &y, &app.tip_angle, 0, 180, "%d\xC2\xB0");
         if (app.tip == TIP_OVAL) {
-            y += 8;
-            font_draw_in(ui.dl, F_UI, rect(x, y, 76, 20), ALIGN_LEFT, "Roundness", C_TX3);
-            float pc = roundf(ui_slider(ui_id("tip-aspect"), rect(x + 80, y, w - 80 - 48, 20), app.tip_aspect * 100, 5, 100));
+            y += 10;
+            float pc = app.tip_aspect * 100;
+            slider_row("tip-aspect", "Roundness", x, w, &y, &pc, 5, 100, "%d%%");
             app.tip_aspect = pc / 100;
-            char a[16]; snprintf(a, sizeof(a), "%d%%", (int)pc);
-            font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, y, 44, 20), ALIGN_RIGHT, a, C_TX);
-            y += 20;
         }
     }
-    y += 16;
-    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Taper", C_TX3); y += 22;
-    static const char *tapers[] = {"None", "Start", "End", "Both"};
-    app.taper = (u8)ui_segmented(ui_id("taper"), rect(x, y, w, 30), tapers, 4, app.taper); y += 30;
-    *py = y;
+    *py = y + 4;
 }
 
-static void slider_row(const char *id, const char *label, float x, float w, float *y, float *v, float lo, float hi, const char *fmt) {
-    font_draw_in(ui.dl, F_UI, rect(x, *y, 76, 20), ALIGN_LEFT, label, C_TX3);
-    *v = roundf(ui_slider(ui_id(id), rect(x + 80, *y, w - 80 - 48, 20), *v, lo, hi));
-    char s[16]; snprintf(s, sizeof(s), fmt, (int)*v);
-    font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, *y, 44, 20), ALIGN_RIGHT, s, C_TX);
-    *y += 20;
+static void texture_block(float x, float w, float *py) {
+    float y = *py;
+    // the texture: none, the built-ins, the user's; the button brings in an image of one's own
+    int n = texture_count(), sel = 0;
+    const char *items[66];
+    items[0] = "None";
+    int m = 1;
+    for (int i = 0; i < n && m < 66; i++) { items[m++] = texture_name(i); if (!strcmp(texture_name(i), app.texture)) sel = m - 1; }
+    font_draw_in(ui.dl, F_UI, rect(x, y + 5, 76, 20), ALIGN_LEFT, "Grain", C_TX3);
+    Rect ib = {x + w - 30, y, 30, 30};
+    if (small_icon(ui_id("tex-import"), ib, IC_IMPORT, true, "Add a texture from an image (grey: white lets the ink through)")) {
+        char path[512], name[48];
+        if (plat_open_dialog(path, sizeof(path), "Images", "*.png;*.jpg;*.jpeg;*.bmp")) {
+            if (texture_import(path, name, sizeof(name))) snprintf(app.texture, sizeof(app.texture), "%s", name);
+            else app_toast("Couldn't read that image");
+        }
+    }
+    Rect dd = {x + 84, y, w - 84 - 36, 30};
+    y += 30;
+    if (app.texture[0] && texture_find(app.texture) >= 0) {
+        y += 12;
+        slider_row("tex-density", "Density", x, w, &y, &app.tex_density, 0, 100, "%d%%");
+        y += 10;
+        slider_row("tex-scale", "Scale", x, w, &y, &app.tex_scale, 10, 400, "%d%%");
+    }
+    *py = y + 4;
+    // the dropdown last: its list is drawn over the rows below
+    int ns = ui_dropdown(ui_id("tex-pick"), dd, items, m, sel);
+    if (ns != sel) snprintf(app.texture, sizeof(app.texture), "%s", ns ? items[ns] : "");
+}
+
+static void delete_button(int i, float x, float w, float *py) {
+    Rect del = {x, *py, w, 30};
+    UiId did = ui_id("brush-delete");
+    UiResp dre = ui_interact(did, del);
+    dl_rrect_border(ui.dl, del, 7, 1, dre.hover ? C_LINE2 : C_LINE);
+    if (dre.hover) dl_rrect(ui.dl, rect_inset(del, 1, 1), 6, C_S2);
+    float tw = font_width(F_UI, "Delete Brush");
+    icon_draw(ui.dl, IC_TRASH, v2(del.x + del.w / 2 - tw / 2 - 6, del.y + 15), ICON_S, false, dre.hover ? C_TX : C_TX3);
+    font_draw_in(ui.dl, F_UI, rect(del.x + del.w / 2 - tw / 2 + 6, del.y, tw + 4, del.h), ALIGN_LEFT, "Delete Brush", dre.hover ? C_TX : C_TX2);
+    if (dre.clicked) ask_delete(&i, 1, rect(del.x, del.y + del.h + 4, del.w, 1));
+    *py += 30;
 }
 
 // the settings of one of the user's brushes: they are the brush in use while open, and every change is
@@ -415,6 +509,7 @@ static void brush_editor(Rect r) {
     BrushPreset *p = &app.presets[i];
     static float scroll, content;
     static bool dirty;
+    static bool open[6] = {true, true, true, true, true, true};
     if (rect_has(r, ui.in.mouse) && ui_mouse_free() && ui.in.wheel_y != 0) scroll -= ui.in.wheel_y * 40;
     scroll = clampf(scroll, 0, MAX(0, content - r.h));
     float x = r.x + 16, w = r.w - 32, y = r.y + 12 - scroll;
@@ -437,44 +532,54 @@ static void brush_editor(Rect r) {
     y += 30 + 14;
 
     // a stroke with it, light, heavy, light
-    Rect pv = {x, y, w, 56};
+    Rect pv = {x, y, w, 60};
     dl_rrect(ui.dl, pv, 8, C_S2);
     BrushPreset big = *p;
     big.size *= 2;   // the list's ribbons are small; here the size shows
     ribbon(rect_inset(pv, 12, 4), &big, C_TX);
-    y += 56 + 16;
+    y += 60 + 8;
 
-    slider_row("brush-size", "Size", x, w, &y, &app.brush_size, 1, 100, "%d");
-    y += 10;
-    slider_row("brush-smooth", "Smoothing", x, w, &y, &app.brush_smooth, 0, 100, "%d");
+    if (block("blk-shape", "Shape", x, w, &y, &open[0])) shape_block(x, w, &y);
+    if (block("blk-pressure", "Pressure", x, w, &y, &open[1])) {
+        font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Pressure \xE2\x86\x92 size", C_TX3); y += 22;
+        curve_editor(rect(x, y, w, 104));
+        y += 104 + 4;
+    }
+    if (block("blk-taper", "Taper", x, w, &y, &open[2])) {
+        slider_row("taper-start", "Start", x, w, &y, &app.taper_s, 0, 100, "%d%%");
+        y += 10;
+        slider_row("taper-end", "End", x, w, &y, &app.taper_e, 0, 100, "%d%%");
+        y += 4;
+    }
+    if (block("blk-ink", "Ink", x, w, &y, &open[3])) {
+        slider_row("brush-opacity", "Opacity", x, w, &y, &app.brush_opacity, 1, 100, "%d%%");
+        y += 4;
+    }
+    float ty = y;
+    bool tex_open = block("blk-texture", "Texture", x, w, &y, &open[4]);
+    if (tex_open) { ty = y; y += 30 + 4; if (app.texture[0] && texture_find(app.texture) >= 0) y += 12 + 20 + 10 + 20; }
+    if (block("blk-stab", "Stabilization", x, w, &y, &open[5])) {
+        slider_row("brush-smooth", "Smoothing", x, w, &y, &app.brush_smooth, 0, 100, "%d");
+        y += 10;
+        slider_row("brush-fit", "Curve fit", x, w, &y, &app.brush_fit, 0, 100, "%d");
+        y += 4;
+    }
+    y += 6;
+    dl_rect(ui.dl, rect(r.x, y, r.w, 1), C_LINE);
     y += 16;
-    tip_settings(x, w, &y);
+    delete_button(i, x, w, &y);
+    if (tex_open) texture_block(x, w, &ty);   // after the blocks below it: its dropdown list goes over them
     y += 16;
-    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Pressure \xE2\x86\x92 size", C_TX3); y += 22;
-    curve_editor(rect(x, y, w, 104));
-    y += 104 + 20;
-
-    Rect del = {x, y, w, 30};
-    UiId did = ui_id("brush-delete");
-    UiResp dre = ui_interact(did, del);
-    dl_rrect_border(ui.dl, del, 7, 1, dre.hover ? C_LINE2 : C_LINE);
-    if (dre.hover) dl_rrect(ui.dl, rect_inset(del, 1, 1), 6, C_S2);
-    float tw = font_width(F_UI, "Delete Brush");
-    icon_draw(ui.dl, IC_TRASH, v2(del.x + del.w / 2 - tw / 2 - 6, del.y + 15), ICON_S, false, dre.hover ? C_TX : C_TX3);
-    font_draw_in(ui.dl, F_UI, rect(del.x + del.w / 2 - tw / 2 + 6, del.y, tw + 4, del.h), ALIGN_LEFT, "Delete Brush", dre.hover ? C_TX : C_TX2);
-    if (dre.clicked) ask_delete(&i, 1, rect(del.x, del.y + del.h + 4, del.w, 1));
-    y += 30 + 16;
     content = y + scroll - r.y;
     if (content > r.h) {
-        float th = r.h * r.h / content, ty = r.y + (r.h - th) * scroll / (content - r.h);
-        dl_rrect(ui.dl, rect(r.x + r.w - 5, ty, 3, th), 1.5f, hexa(0xffffff, 0x22));
+        float th = r.h * r.h / content, sy = r.y + (r.h - th) * scroll / (content - r.h);
+        dl_rrect(ui.dl, rect(r.x + r.w - 5, sy, 3, th), 1.5f, hexa(0xffffff, 0x22));
     }
 
     // what the controls (and the context bar) changed goes into the brush
     if (B_EDIT != i) return;
     BrushPreset q = *p;
-    q.size = app.brush_size; q.smoothing = app.brush_smooth; q.curve = app.curve;
-    q.tip = app.tip; q.angle = app.tip_angle; q.aspect = app.tip_aspect; q.taper = app.taper;
+    preset_from_app(&q);
     if (memcmp(&q, p, sizeof(q))) { *p = q; dirty = true; }
     if (dirty && !ui.in.down[0]) { app_presets_save(); dirty = false; }
 }

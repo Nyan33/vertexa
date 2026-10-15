@@ -33,6 +33,7 @@ static const char *HLSL_PS =
     "    return tex.Sample(smp, float2((saturate(t) * 255.0 + 0.5) / 256.0, 0.5)) * c;\n"
     "  }\n"
     "  else if (kind == 11) { float4 t = tex.Sample(smp, i.uv); return float4(t.rgb * c.rgb + i.p.rgb * t.a, t.a * c.a); }\n"
+    "  else if (kind == 12) { float4 t = tex.Sample(smp, i.uv); float l = dot(t.rgb + (1.0 - t.a), float3(0.299, 0.587, 0.114)); a = saturate(lerp(1.0, l, i.p.x)); }\n"
     "  else if (kind == 3) { float d = sd_rbox(i.uv, i.p.xy, i.p.z); if (i.p.w > 0.0) d = abs(d + i.p.w * 0.5) - i.p.w * 0.5; a = saturate(0.5 - d); }\n"
     "  else if (kind == 4) { float r = length(i.uv); float d = max(r - i.p.x, i.p.y - r); a = saturate(0.5 - d); float h = atan2(i.uv.y, i.uv.x) / 6.2831853; c.rgb = hsv(frac(h + 1.0), 0.86, 1.0); }\n"
     "  else if (kind == 5) { float2 t = (i.uv + i.p.xy) / (2.0 * i.p.xy); c.rgb = hsv(i.k.y, saturate(t.x), saturate(1.0 - t.y)); a = saturate(0.5 - sd_rbox(i.uv, i.p.xy, i.p.z)); }\n"

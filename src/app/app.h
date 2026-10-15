@@ -9,9 +9,22 @@ typedef struct {
     char name[48];
     float size, smoothing;
     Curve curve;
-    u8 tip; float angle, aspect; u8 taper;
+    u8 tip; float angle, aspect;
+    float taper_s, taper_e;       // taper at the start / end, % (100 = nine tip diameters)
+    float opacity;                // %
+    float fit;                    // 0..100: smoothing of the curve on release
+    char texture[48];             // paper grain (app/textures.c), "" = none
+    float tex_density, tex_scale; // %
     bool user;                    // the user's (made, duplicated or imported): editable; built-ins are not
 } BrushPreset;
+
+// brush textures (app/textures.c): built-in grains and the user's images in %APPDATA%/Vertexa/textures
+int texture_count(void);
+const char *texture_name(int i);
+bool texture_is_user(int i);
+int texture_find(const char *name);         // index, -1 if there is none by that name
+int texture_bitmap(const char *name);       // its bitmap in the bank (made on first use), 0 if none
+bool texture_import(const char *path, char *name, int cap);
 
 enum { TRIM_TO_INTERSECTION, TRIM_WHOLE };
 enum { SELM_STROKES, SELM_SECTIONS };            // what a click picks
@@ -76,7 +89,9 @@ typedef struct {
     float brush_size, brush_smooth;
     bool brush_pressure, brush_tilt, object_draw;
     int brush_mode;               // 0 paint normal, 2 paint behind
-    u8 tip, taper; float tip_angle, tip_aspect;
+    u8 tip; float tip_angle, tip_aspect;
+    float taper_s, taper_e, brush_opacity, brush_fit;
+    char texture[48]; float tex_density, tex_scale;
     Curve curve;
     float eraser_size; int eraser_mode;
     float pencil_size; int pencil_mode;

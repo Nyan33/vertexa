@@ -110,7 +110,7 @@ bool doc_save(Doc *d, const char *path) {
     for (ptrdiff_t i = 0; i < arrlen(d->drawings); i++)
         for (ptrdiff_t k = 0; d->drawings[i].used && k < arrlen(d->drawings[i].items); k++) {
             Item *it = &d->drawings[i].items[k];
-            if ((it->kind != IT_BITMAP && it->kind != IT_FILL) || !it->sym || !bitmap_get(it->sym)) continue;
+            if ((it->kind != IT_BITMAP && it->kind != IT_FILL && !(it->kind == IT_STROKE && it->texture)) || !it->sym || !bitmap_get(it->sym)) continue;
             bool seen = false;
             for (ptrdiff_t q = 0; q < arrlen(bms); q++) seen |= bms[q] == it->sym;
             if (!seen) arrput(bms, it->sym);
@@ -313,7 +313,7 @@ Doc *doc_load(const char *path, char *err, int errcap) {
         for (ptrdiff_t i = 0; i < arrlen(d->drawings); i++)
             for (ptrdiff_t k = 0; k < arrlen(d->drawings[i].items); k++) {
                 Item *it = &d->drawings[i].items[k];
-                if (it->kind != IT_BITMAP && !(it->kind == IT_FILL && it->sym)) continue;
+                if (it->kind != IT_BITMAP && !(it->kind == IT_FILL && it->sym) && !(it->kind == IT_STROKE && it->texture && it->sym)) continue;
                 int to = 0;
                 for (ptrdiff_t q = 0; q < arrlen(map); q++) if (map[q].from == it->sym) to = map[q].to;
                 it->sym = to;

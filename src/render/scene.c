@@ -44,7 +44,9 @@ static Seg *seg_new(Frame *F, int kind, int level, bool clear) {
     if (kind == SEG_DRAW) F->last_at[level] = F->nsegs - 1;
     return s;
 }
+static u32 stroke_tex(int id, int *w, int *h);
 void frame_begin(Frame *F, Target *main, Pool *pool, u32 any_tex) {
+    brush_texture_source(stroke_tex);
     F->nsegs = 0; F->main = main; F->pool = pool; F->w = main->w; F->h = main->h; F->tex = any_tex; F->level = 0;
     seg_new(F, SEG_DRAW, 0, true);
 }
@@ -311,6 +313,12 @@ static u32 bitmap_tex(Bitmap *b) {
 }
 
 u32 bitmap_texture(int id) { Bitmap *b = bitmap_get(id); return b && b->px ? bitmap_tex(b) : 0; }
+static u32 stroke_tex(int id, int *w, int *h) {   // textured strokes (brush.c asks through brush_texture_source)
+    Bitmap *b = bitmap_get(id);
+    if (!b || !b->px) return 0;
+    *w = b->w; *h = b->h;
+    return bitmap_tex(b);
+}
 
 static void bitmap_quad(DrawList *dl, Bitmap *b, Mat m, Color c, u8 pipe, const float *fxp) {
     V2 p[4] = {mat_ap(m, v2(0, 0)), mat_ap(m, v2((float)b->w, 0)), mat_ap(m, v2((float)b->w, (float)b->h)), mat_ap(m, v2(0, (float)b->h))};

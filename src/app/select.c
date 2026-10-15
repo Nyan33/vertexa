@@ -208,7 +208,8 @@ static void transform_item(Item *dst, const Item *src, Mat T) {
     float s = sqrtf(fabsf(mat_det(T)));
     for (ptrdiff_t i = 0; i < arrlen(dst->pts); i++) { V2 q = mat_ap(T, v2(dst->pts[i].x, dst->pts[i].y)); dst->pts[i].x = q.x; dst->pts[i].y = q.y; dst->pts[i].r *= s; }
     for (ptrdiff_t i = 0; i < arrlen(dst->poly); i++) dst->poly[i] = mat_ap(T, dst->poly[i]);
-    if (item_placed(dst) || (dst->kind == IT_FILL && dst->sym)) dst->m = mat_mul(T, dst->m);   // bitmap fills move with their fill
+    if (item_placed(dst) || (dst->kind == IT_FILL && dst->sym) || (dst->kind == IT_STROKE && dst->texture))
+        dst->m = mat_mul(T, dst->m);   // bitmap fills and stroke textures move with their vector
     if (dst->kind == IT_STROKE) dst->angle += atan2f(T.b, T.a);
     item_bounds(dst);
 }

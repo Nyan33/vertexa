@@ -15,8 +15,12 @@ interface drawn entirely on the GPU. Documents use a new format (`.vxa`). Window
 
 **Drawing**
 - A Flash-style vector brush: stabilizer, pressure curve with editable points, tilt, tapers, three tip shapes.
-- Your own brushes: duplicate any brush, edit its name, size, smoothing, tip, taper and pressure curve,
-  reorder the list by dragging, export and import them (`.vxbrush`).
+- Your own brushes: duplicate any brush and edit it in blocks (shape, pressure curve, start and end
+  taper, opacity, texture, stabilization and curve fit), reorder the list by dragging, export and import
+  them (`.vxbrush`).
+- Brush textures: paper grain shows through the ink. Built-in Paper, Pencil, Canvas, Watercolor and
+  Chalk, or any image of your own; density and scale. New Pencil, Chalk and Wash brushes. Documents keep
+  the textures their strokes use.
 - Clip Studio Paint brush import (`.sut`).
 - Trim Edge (`C`): cuts a stroke back to the nearest intersections with a click or a drag.
 - Umoupen-style selection: the vector itself is picked, whole or just the piece between intersections;

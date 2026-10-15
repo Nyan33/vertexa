@@ -37,6 +37,7 @@ set(VX_SOURCES
     src/app/shapes.c
     src/app/export.c
     src/app/settings.c
+    src/app/textures.c
     src/app/keys.c
     src/app/home.c
     src/app/exporter.c

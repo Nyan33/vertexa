@@ -73,29 +73,38 @@ void bb_add(Builder *b, float x, float y, float p, float tilt) {
     emit(b, b->sx, b->sy, b->sp, tilt);
 }
 
-static void apply_taper(SPt *pts, int n, u8 mode, float len) {
-    if (mode == TAPER_NONE || n < 2) return;
+// thins the ends over ls (start) and le (end) document units, at most 45 % of the stroke each
+static void apply_taper(SPt *pts, int n, float ls, float le) {
+    if ((ls <= 0 && le <= 0) || n < 2) return;
     float *s = malloc(sizeof(float) * n);
     s[0] = 0;
     for (int i = 1; i < n; i++) s[i] = s[i - 1] + hypotf(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    float total = s[n - 1], L = MIN(len, total * 0.45f);
-    if (L > 0) for (int i = 0; i < n; i++) {
+    float total = s[n - 1], Ls = MIN(ls, total * 0.45f), Le = MIN(le, total * 0.45f);
+    for (int i = 0; i < n; i++) {
         float k = 1;
-        if (mode == TAPER_START || mode == TAPER_BOTH) { float t = MIN(1, s[i] / L); k = MIN(k, t * t * (3 - 2 * t) * 0.92f + 0.08f); }
-        if (mode == TAPER_END || mode == TAPER_BOTH) { float t = MIN(1, (total - s[i]) / L); k = MIN(k, t * t * (3 - 2 * t) * 0.95f + 0.05f); }
+        if (Ls > 0) { float t = MIN(1, s[i] / Ls); k = MIN(k, t * t * (3 - 2 * t) * 0.92f + 0.08f); }
+        if (Le > 0) { float t = MIN(1, (total - s[i]) / Le); k = MIN(k, t * t * (3 - 2 * t) * 0.95f + 0.05f); }
         pts[i].r *= k;
     }
     free(s);
+}
+
+void stroke_set_texture(Stroke *s, int bitmap, float density, float scale) {
+    s->texture = bitmap > 0;
+    s->sym = bitmap > 0 ? bitmap : 0;
+    s->alpha = density;                          // strokes keep the grain density here
+    s->m = mat_scale(scale > 0 ? scale : 1, scale > 0 ? scale : 1);   // texture pixels -> drawing, anchored to the canvas
 }
 
 static SPt *scratch;
 void bb_live(Builder *b, Stroke *out) {
     arrsetlen(scratch, 0);
     if (arrlen(b->pts)) memcpy(arraddnptr(scratch, arrlen(b->pts)), b->pts, sizeof(SPt) * arrlen(b->pts));
-    if (b->o.taper == TAPER_START || b->o.taper == TAPER_BOTH) apply_taper(scratch, (int)arrlen(scratch), TAPER_START, b->o.size * 4.5f);
+    apply_taper(scratch, (int)arrlen(scratch), b->o.taper_s * b->o.size, 0);
     memset(out, 0, sizeof(*out));
     out->pts = scratch;
     out->color = b->o.color; out->tip = b->o.tip; out->angle = b->o.angle; out->aspect = b->o.aspect; out->erase = b->o.erase;
+    if (!b->o.erase) stroke_set_texture(out, b->o.tex, b->o.tex_density, b->o.tex_scale);
     stroke_bounds(out);
 }
 
@@ -134,11 +143,12 @@ Stroke bb_finish(Builder *b) {
         }
     }
     int n = (int)arrlen(b->pts);
-    apply_taper(b->pts, n, b->o.taper, b->o.size * 4.5f);
-    float eps = 0.35f * b->o.unit * (1 + b->o.smoothing / 40.0f);
+    apply_taper(b->pts, n, b->o.taper_s * b->o.size, b->o.taper_e * b->o.size);
+    float eps = 0.35f * b->o.unit * (1 + b->o.fit / 40.0f);
     Stroke s = {0};
     s.pts = simplify(b->pts, n, eps);
     s.color = b->o.color; s.tip = b->o.tip; s.angle = b->o.angle; s.aspect = b->o.aspect; s.erase = b->o.erase;
+    if (!b->o.erase) stroke_set_texture(&s, b->o.tex, b->o.tex_density, b->o.tex_scale);
     stroke_bounds(&s);
     bb_free(b);
     return s;
@@ -228,6 +238,9 @@ SPt *brush_resample(const Stroke *st, float step) {
     return resampled;
 }
 
+static BrushTexFn tex_fn;
+void brush_texture_source(BrushTexFn fn) { tex_fn = fn; }
+
 static int cover_kind; static float cover_k1;
 void brush_cover_style(int kind, float k1) { cover_kind = kind; cover_k1 = k1; }
 
@@ -254,6 +267,26 @@ static void cover(DrawList *dl, const Item *it, Mat m, Color color, u8 pipe, flo
     u32 i0 = dl_vtx_k(dl, c[0].x, c[0].y, color, cover_kind, cover_k1), i1 = dl_vtx_k(dl, c[1].x, c[1].y, color, cover_kind, cover_k1);
     u32 i2 = dl_vtx_k(dl, c[2].x, c[2].y, color, cover_kind, cover_k1), i3 = dl_vtx_k(dl, c[3].x, c[3].y, color, cover_kind, cover_k1);
     dl_idx(dl, i0, i1, i2); dl_idx(dl, i0, i2, i3);
+}
+
+// the stencilled area covered with a texture (uvm: drawing space -> texture coordinates)
+static void tex_cover(DrawList *dl, const Item *it, Mat m, float pad, u32 tex, Mat uvm, Color tint, u8 smp, int kind, const float p[4]) {
+    V2 q[4] = {v2(it->bx0 - pad, it->by0 - pad), v2(it->bx1 + pad, it->by0 - pad), v2(it->bx1 + pad, it->by1 + pad), v2(it->bx0 - pad, it->by1 + pad)};
+    u32 old = dl->tex;
+    dl_set_tex(dl, tex);
+    dl_set_sampler(dl, smp);
+    dl_set_pipe(dl, PIPE_COVER);
+    u32 v0 = 0;
+    static const float zero[4] = {0};
+    const float *p4 = p ? p : zero;
+    for (int i = 0; i < 4; i++) {
+        V2 s = mat_ap(m, q[i]), uv = mat_ap(uvm, q[i]);
+        u32 v = dl_vtx_uvp(dl, s.x, s.y, uv.x, uv.y, tint, kind, p4);
+        if (!i) v0 = v;
+    }
+    dl_idx(dl, v0, v0 + 1, v0 + 2); dl_idx(dl, v0, v0 + 2, v0 + 3);
+    dl_set_sampler(dl, SMP_LINEAR);
+    dl_set_tex(dl, old);
 }
 
 /* ── visibility: geometry is only built for what can reach the target ── */
@@ -358,6 +391,14 @@ void brush_draw(DrawList *dl, const Stroke *st, Mat m, Color color, bool erase) 
         arrput(run, seg_end(st, segs - 1));
         draw_run(&e, st, run, (int)arrlen(run), scale);
     }
+    int tw = 0, th = 0;
+    u32 view = st->texture && st->sym && !erase && cover_kind == K_SOLID && !cover_defer && tex_fn ? tex_fn(st->sym, &tw, &th) : 0;
+    if (view && tw > 0 && th > 0) {   // the ink with the texture's grain
+        float p[4] = {clampf(st->alpha, 0, 1), 0, 0, 0};
+        Mat uvm = mat_mul(mat_scale(1.0f / tw, 1.0f / th), mat_inv(st->m));
+        tex_cover(dl, st, m, 2.0f / scale, view, uvm, color, SMP_REPEAT, K_GRAIN, p);
+        return;
+    }
     cover(dl, st, m, color, erase ? PIPE_ERASE : PIPE_COVER, 2.0f / scale);
 }
 
@@ -376,23 +417,7 @@ static void fill_stencil(DrawList *dl, const Item *it, Mat m) {
 void fill_draw_tex(DrawList *dl, const Item *it, Mat m, u32 tex, Mat uvm, Color tint, u8 smp, int kind, const float p[4]) {
     if (arrlen(it->poly) < 3 || !box_visible(m, it->bx0, it->by0, it->bx1, it->by1, view_px(dl))) return;
     fill_stencil(dl, it, m);
-    float pad = 2.0f / MAX(1e-6f, mat_scalef(m));
-    V2 q[4] = {v2(it->bx0 - pad, it->by0 - pad), v2(it->bx1 + pad, it->by0 - pad), v2(it->bx1 + pad, it->by1 + pad), v2(it->bx0 - pad, it->by1 + pad)};
-    u32 old = dl->tex;
-    dl_set_tex(dl, tex);
-    dl_set_sampler(dl, smp);
-    dl_set_pipe(dl, PIPE_COVER);
-    u32 v0 = 0;
-    static const float zero[4] = {0};
-    const float *p4 = p ? p : zero;
-    for (int i = 0; i < 4; i++) {
-        V2 p = mat_ap(m, q[i]), uv = mat_ap(uvm, q[i]);
-        u32 v = dl_vtx_uvp(dl, p.x, p.y, uv.x, uv.y, tint, kind, p4);
-        if (!i) v0 = v;
-    }
-    dl_idx(dl, v0, v0 + 1, v0 + 2); dl_idx(dl, v0, v0 + 2, v0 + 3);
-    dl_set_sampler(dl, SMP_LINEAR);
-    dl_set_tex(dl, old);
+    tex_cover(dl, it, m, 2.0f / MAX(1e-6f, mat_scalef(m)), tex, uvm, tint, smp, kind, p);
 }
 
 // Fill: contours drawn as triangle fans into the stencil with even-odd parity, then covered.

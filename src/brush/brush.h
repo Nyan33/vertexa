@@ -19,7 +19,11 @@ typedef struct {
     bool pressure, tilt;
     Curve curve;
     u8 tip; float angle, aspect;
-    u8 taper;
+    float taper_s, taper_e;   // taper lengths at the start and the end, in tip diameters (0: none)
+    float fit;           // 0..100: how much the stroke is simplified into a smooth curve on release
+    int tex;             // texture (a bitmap id, 0: none): its grain shows through the ink
+    float tex_density;   // 0..1
+    float tex_scale;     // document units per texture pixel
     Color color;
     u8 erase;
     float unit;          // document units per screen pixel
@@ -48,5 +52,9 @@ void fill_draw(DrawList *dl, const Item *it, Mat m, Color color, bool erase);
 void fill_draw_tex(DrawList *dl, const Item *it, Mat m, u32 tex, Mat uvm, Color tint, u8 smp, int kind, const float p[4]);
 void brush_cover_style(int kind, float k1);
 void brush_union_begin(void);                       // following draws only fill the stencil (fills first, then strokes)...
-void brush_union_end(DrawList *dl, Color color);    // ...and one cover shades their union   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
+void brush_union_end(DrawList *dl, Color color);    // ...and one cover shades their union
+// where textured strokes get their texture: the GPU view of a bitmap and its size (set by the renderer)
+typedef u32 (*BrushTexFn)(int bitmap, int *w, int *h);
+void brush_texture_source(BrushTexFn fn);
+void stroke_set_texture(Stroke *s, int bitmap, float density, float scale);   // 0: none   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
 SPt *brush_resample(const Stroke *st, float step);   // dense centerline (scratch array, valid until the next call)
