@@ -1,7 +1,7 @@
 # Vertexa
 
 2D vector animation studio in the spirit of Flash / Adobe Animate, aimed at Friday Night Funkin' animators.
-Rewritten from scratch in **C + sokol** with its own GPU-drawn UI (design: `mockups/a3-graphite.html`).
+Rewritten from scratch in **C + sokol** with its own GPU-drawn UI.
 What changed since the old Qt version: [CHANGELOG.md](CHANGELOG.md).
 
 ## Download
