@@ -1,5 +1,3 @@
-# Vertexa Alpha 2.0
-
 Vertexa has been rewritten from scratch: C17 and sokol (Direct3D 11) instead of C++20 and Qt 6, with its own
 interface drawn entirely on the GPU. Documents use a new format (`.vxa`). Windows only for now.
 
