@@ -52,7 +52,8 @@ void bb_free(Builder *b) { arrfree(b->pts); }
 
 static float radius_for(Builder *b, float p, float tilt) {
     float f = b->o.pressure ? curve_eval(&b->o.curve, p) : 1;
-    if (b->o.tilt && tilt > 0) f *= 1 + 0.7f * MIN(1, tilt / 70);
+    if (b->o.tilt_on && b->o.tilt_curve.n >= 2) f *= curve_eval(&b->o.tilt_curve, MIN(1, MAX(0, tilt) / 90));
+    else if (b->o.tilt && tilt > 0) f *= 1 + 0.7f * MIN(1, tilt / 70);
     return MAX(0.05f, b->o.size / 2 * f);
 }
 
@@ -98,6 +99,11 @@ void stroke_set_image(Stroke *s, const BrushOpts *o) {
     s->img_r1 = o->size / 2 * (o->pressure ? curve_eval(&o->curve, 1) : 1);
     s->img_w0 = o->pressure ? o->img_w0 : o->img_w1;
     s->img_w1 = o->img_w1;
+    s->dual_img = o->dual;
+    s->dual_scale = o->dual_scale > 0 ? o->dual_scale : 1;
+    s->dual_gap = MAX(0.5f, o->dual_spacing * o->size * s->dual_scale);
+    s->dual_angle = o->dual_angle;
+    s->dual_flags = o->dual_flags;
 }
 
 // how wide the image is across at a point of radius r (pressure gives both its size and its width)
@@ -388,10 +394,10 @@ static void img_vtx(DrawList *dl, Mat m, V2 p, float u, float v, Color c, u32 *f
     if (first) *first = i;
 }
 
-static void image_draw(DrawList *dl, const Stroke *st, Mat m, Color color, u32 view, int tw, int th) {
+static void image_draw(DrawList *dl, const Stroke *st, Mat m, Color color, u32 view, int tw, int th, float rs) {
     float scale = mat_scalef(m);
     float rmax = 0;
-    for (ptrdiff_t i = 0; i < arrlen(st->pts); i++) rmax = MAX(rmax, st->pts[i].r);
+    for (ptrdiff_t i = 0; i < arrlen(st->pts); i++) rmax = MAX(rmax, st->pts[i].r * rs);
     if (rmax <= 0) return;
     float aspect = (float)th / tw;   // the image lies with its width along the stroke
     bool fx = st->img_flags & IMGF_FLIP_X, fy = st->img_flags & IMGF_FLIP_Y;
@@ -400,13 +406,14 @@ static void image_draw(DrawList *dl, const Stroke *st, Mat m, Color color, u32 v
     dl_set_tex(dl, view);
     dl_set_sampler(dl, SMP_MIP);
     dl_set_pipe(dl, img_pipe);
-    float step = st->img_mode == IMG_STAMPS ? MAX(0.25f, MIN(st->img_gap / 6, rmax / 2)) : MAX(0.25f, 1.5f / scale);
+    float step = st->img_mode == IMG_STAMPS ? MAX(0.3f / scale, MIN(st->img_gap / 10, rmax / 2)) : MAX(0.25f, 1.5f / scale);
     SPt *p = brush_resample(st, step);
     int n = (int)arrlen(p);
     if (st->img_mode == IMG_STAMPS) {
         // one at the start, then one every img_gap along the line, turned with it (plus the tip angle)
         float ca = cosf(st->angle), sa = sinf(st->angle);
-        float since = st->img_gap;   // distance walked since the last stamp
+        float since = 1e30f;   // distance walked since the last stamp
+        float R = MAX(MAX(st->img_r0, st->img_r1), 1e-3f);
         for (int i = 0; i < MAX(n, 1); i++) {
             SPt a = n ? p[i] : st->pts[0];
             V2 d = {1, 0};
@@ -416,11 +423,12 @@ static void image_draw(DrawList *dl, const Stroke *st, Mat m, Color color, u32 v
                 if (L > 1e-6f) d = v2(dx / L, dy / L);
             }
             if (i) since += hypotf(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
-            if (since < st->img_gap) continue;
+            float gap = st->img_r1 > 0 || st->img_r0 > 0 ? st->img_gap * clampf(a.r / R, 0.03f, 1) : st->img_gap;
+            if (since < MAX(gap, 0.3f / scale)) continue;
             since = 0;
             if (st->img_flags & IMGF_FIXED) d = v2(1, 0);
             V2 ax = {d.x * ca - d.y * sa, d.x * sa + d.y * ca}, ay = {-ax.y, ax.x};
-            float hl = a.r, hs = a.r * aspect * img_width(st, a.r);   // half length, half width
+            float hl = a.r * rs, hs = a.r * rs * aspect * img_width(st, a.r);   // half length, half width
             V2 c = {a.x, a.y};
             u32 q;
             img_vtx(dl, m, v2(c.x - ax.x * hl - ay.x * hs, c.y - ax.y * hl - ay.y * hs), u0, v0, color, &q);
@@ -454,6 +462,17 @@ done:
     dl_set_tex(dl, old);
 }
 
+bool brush_draw_dual(DrawList *dl, const Stroke *st, Mat m) {
+    int tw = 0, th = 0;
+    u32 view = st->dual_img && tex_fn ? tex_fn(st->dual_img, &tw, &th) : 0;
+    if (!view || tw <= 0 || th <= 0 || !arrlen(st->pts)) return false;
+    Stroke d = *st;   // the same line, stamped with the second image
+    d.img_mode = IMG_STAMPS; d.img_gap = st->dual_gap; d.angle = st->dual_angle; d.img_flags = st->dual_flags;
+    d.img_w0 = d.img_w1 = 0;
+    image_draw(dl, &d, m, 0xffffffffu, view, tw, th, st->dual_scale > 0 ? st->dual_scale : 1);
+    return true;
+}
+
 void brush_draw(DrawList *dl, const Stroke *st, Mat m, Color color, bool erase) {
     int n = (int)arrlen(st->pts);
     if (!n) return;
@@ -466,7 +485,7 @@ void brush_draw(DrawList *dl, const Stroke *st, Mat m, Color color, bool erase) 
     if (st->img_mode && st->img && !erase && cover_kind == K_SOLID && !cover_defer && tex_fn) {
         int tw = 0, th = 0;
         u32 view = tex_fn(st->img, &tw, &th);
-        if (view && tw > 0 && th > 0) { image_draw(dl, st, m, color, view, tw, th); return; }
+        if (view && tw > 0 && th > 0) { image_draw(dl, st, m, color, view, tw, th, 1); return; }
     }
     Em e = {dl, m};
     dl_set_pipe(dl, PIPE_STENCIL);

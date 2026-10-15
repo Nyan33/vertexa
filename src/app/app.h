@@ -19,6 +19,11 @@ typedef struct {
     u8 img_mode, img_flags;       // IMG_* (0: the vector tip), IMGF_*
     float img_spacing;            // stamps: % of the tip size between them
     float img_w0, img_w1;         // width across the image with light / full pressure, %
+    bool tilt_on; Curve tilt;     // pen tilt -> size (0 upright .. 1 lying flat)
+    bool dual_on;                 // a second tip image masks the stroke (Clip Studio's dual brush)
+    char dual_image[48];
+    float dual_spacing, dual_angle, dual_scale;   // %, degrees, % of the brush size
+    u8 dual_flags;
     bool user;                    // the user's (made, duplicated or imported): editable; built-ins are not
 } BrushPreset;
 
@@ -103,6 +108,8 @@ typedef struct {
     float taper_s, taper_e, brush_opacity, brush_fit;
     char texture[48]; float tex_density, tex_scale;
     char tip_image[48]; u8 img_mode, img_flags; float img_spacing, img_w0, img_w1;
+    bool tilt_on; Curve tilt_curve;
+    bool dual_on; char dual_image[48]; float dual_spacing, dual_angle, dual_scale; u8 dual_flags;
     Curve curve;
     float eraser_size; int eraser_mode;
     float pencil_size; int pencil_mode;
@@ -217,8 +224,8 @@ V2 st_local(V2 screen);
 V2 st_screen(V2 local);
 float st_unit(void);                       // editing units per screen pixel
 Drawing *st_drawing(bool create);          // active layer's drawing at the current frame
-const char *st_cannot_edit(void);
-void st_test_stroke(const V2 *pts, const float *pressure, int n);   // self-tests: a brush stroke with pen pressures          // why the active layer can't be edited (NULL if it can)
+const char *st_cannot_edit(void);          // why the active layer can't be edited (NULL if it can)
+void st_test_stroke(const V2 *pts, const float *pressure, const float *tilt, int n);   // self-tests: a brush stroke with pen pressure and tilt
 void st_invalidate(void);                  // force a stage re-render
 
 // tools

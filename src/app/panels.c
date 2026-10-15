@@ -338,7 +338,7 @@ static void ribbon(Rect r, const BrushPreset *p, Color c) {
 
 // pressure -> size: click adds a point, drag moves it, right-click / double-click or dragging it
 // out of the graph removes it; the end points move up and down only
-static void curve_editor(Rect r) {
+static void curve_editor(Rect r, Curve *c, int which, const char *xlabel) {
     dl_rrect(ui.dl, r, 8, C_S2);
     dl_rrect_border(ui.dl, r, 8, 1, C_LINE);
     Rect g = rect_inset(r, 10, 10);
@@ -346,14 +346,17 @@ static void curve_editor(Rect r) {
         dl_rect(ui.dl, rect(g.x, roundf(g.y + g.h * i / 4), g.w, 1), hexa(0xffffff, 0x0a));
         dl_rect(ui.dl, rect(roundf(g.x + g.w * i / 4), g.y, 1, g.h), hexa(0xffffff, 0x0a));
     }
-    Curve *c = &app.curve;
-    static int drag = -1;
-    static bool out;
+    static int drags[2] = {-1, -1};
+    static bool outs[2];
+    int *dragp = &drags[which & 1];
+    bool *outp = &outs[which & 1];
+#define drag (*dragp)
+#define out (*outp)
     V2 m = ui.in.mouse;
 #define CPT(i) v2(g.x + g.w * c->x[i], g.y + g.h * (1 - c->y[i]))
     int hot = -1;
     for (int i = 0; i < c->n; i++) { V2 q = CPT(i); if (fabsf(m.x - q.x) <= 7 && fabsf(m.y - q.y) <= 7) hot = i; }
-    UiId id = ui_id("pressure-curve");
+    UiId id = ui_idi("brush-curve", which);
     UiResp re = ui_interact(id, r);
     float mx = clampf((m.x - g.x) / g.w, 0, 1), my = clampf(1 - (m.y - g.y) / g.h, 0, 1);
     bool inner = hot > 0 && hot < c->n - 1;
@@ -401,7 +404,9 @@ static void curve_editor(Rect r) {
         snprintf(s, sizeof(s), out ? "remove" : "%d%% \xE2\x86\x92 %d%%", (int)roundf(c->x[drag] * 100), (int)roundf(c->y[drag] * 100));
         font_draw_in(ui.dl, F_MONO, rect(g.x, g.y, g.w - 2, 14), ALIGN_RIGHT, s, C_TX2);
     }
-    font_draw(ui.dl, F_MONO, g.x + 2, g.y + g.h - 3, "pressure", hexa(0xffffff, 0x40));
+    font_draw(ui.dl, F_MONO, g.x + 2, g.y + g.h - 3, xlabel, hexa(0xffffff, 0x40));
+#undef drag
+#undef out
 }
 
 // the brush list: a click picks a brush, Ctrl / Shift pick several, dragging a row moves it. Each row
@@ -436,6 +441,9 @@ static void preset_from_app(BrushPreset *q) {
     snprintf(q->tip_image, sizeof(q->tip_image), "%s", app.tip_image);
     q->img_mode = app.img_mode; q->img_flags = app.img_flags; q->img_spacing = app.img_spacing;
     q->img_w0 = app.img_w0; q->img_w1 = app.img_w1;
+    q->tilt_on = app.tilt_on; q->tilt = app.tilt_on ? app.tilt_curve : (Curve){0};
+    q->dual_on = app.dual_on; snprintf(q->dual_image, sizeof(q->dual_image), "%s", app.dual_image);
+    q->dual_spacing = app.dual_spacing; q->dual_angle = app.dual_angle; q->dual_scale = app.dual_scale; q->dual_flags = app.dual_flags;
 }
 
 void brush_new(void) {   // the brush in use as it is now, at the end of the list, opened for editing
@@ -501,16 +509,59 @@ static bool block(const char *id, const char *title, float x, float w, float *y,
     return *open;
 }
 
-static struct { bool on; Rect r; } IMG_DD;   // the tip image dropdown, drawn after the blocks
-static void image_dropdown(void) {
-    if (!IMG_DD.on) return;
+// tip image dropdowns (the tip's, the dual tip's), drawn after the blocks so their lists go over them
+static struct { bool on; Rect r; char *name; } IMG_DD, DUAL_DD;
+static void image_dropdown_of(void *dd, const char *id) {
+    typeof(IMG_DD) *d = dd;
+    if (!d->on) return;
     int n = tipimg_count(), sel = 0;
     const char *items[64];
     int m = 0;
-    for (int i = 0; i < n && m < 64; i++) { items[m++] = tipimg_name(i); if (!strcmp(tipimg_name(i), app.tip_image)) sel = m - 1; }
+    for (int i = 0; i < n && m < 64; i++) { items[m++] = tipimg_name(i); if (!strcmp(tipimg_name(i), d->name)) sel = m - 1; }
     if (!m) return;
-    int ns = ui_dropdown(ui_id("tip-pick"), IMG_DD.r, items, m, sel);
-    if (ns != sel) snprintf(app.tip_image, sizeof(app.tip_image), "%s", items[ns]);
+    int ns = ui_dropdown(ui_id(id), d->r, items, m, sel);
+    if (ns != sel) snprintf(d->name, 48, "%s", items[ns]);
+}
+static void image_dropdown(void) { image_dropdown_of(&IMG_DD, "tip-pick"); image_dropdown_of(&DUAL_DD, "dual-pick"); }
+
+static bool pick_tip_image(char *name) {   // a file into the tip images
+    char path[512], got[48];
+    if (!plat_open_dialog(path, sizeof(path), "Tip image", "*.png;*.jpg;*.jpeg;*.bmp")) return false;
+    if (!tipimg_import(path, got, sizeof(got))) { app_toast("Couldn't read that image"); return false; }
+    snprintf(name, 48, "%s", got);
+    return true;
+}
+
+// a second tip whose stamps mask the stroke: it shows only where both are (Clip Studio's dual brush)
+static void dual_block(float x, float w, float *py) {
+    float y = *py;
+    DUAL_DD.on = false;
+    if (ui_chip("Mask with a second tip", rect(x, y, w, 28), app.dual_on)) {
+        app.dual_on = !app.dual_on;
+        if (app.dual_on && !app.dual_image[0]) {
+            if (app.tip_image[0]) snprintf(app.dual_image, sizeof(app.dual_image), "%s", app.tip_image);
+            else if (tipimg_count()) snprintf(app.dual_image, sizeof(app.dual_image), "%s", tipimg_name(0));
+            else if (!pick_tip_image(app.dual_image)) app.dual_on = false;
+        }
+    }
+    y += 28;
+    if (app.dual_on) {
+        y += 12;
+        font_draw_in(ui.dl, F_UI, rect(x, y + 5, 76, 20), ALIGN_LEFT, "Image", C_TX3);
+        if (small_icon(ui_id("dual-import"), rect(x + w - 30, y, 30, 30), IC_IMPORT, true, "Add a tip image (dark and opaque is ink)"))
+            pick_tip_image(app.dual_image);
+        DUAL_DD.on = true; DUAL_DD.r = rect(x + 84, y, w - 84 - 36, 30); DUAL_DD.name = app.dual_image;
+        y += 30 + 12;
+        slider_row("dual-size", "Size", x, w, &y, &app.dual_scale, 5, 400, "%d%%");
+        y += 10;
+        slider_row("dual-spacing", "Spacing", x, w, &y, &app.dual_spacing, 1, 300, "%d%%");
+        y += 10;
+        slider_row("dual-angle", "Angle", x, w, &y, &app.dual_angle, 0, 359, "%d\xC2\xB0");
+        y += 12;
+        if (ui_chip("Turn with the line", rect(x + 84, y, w - 84, 28), !(app.dual_flags & IMGF_FIXED))) app.dual_flags ^= IMGF_FIXED;
+        y += 28;
+    }
+    *py = y + 4;
 }
 
 static void shape_block(float x, float w, float *py) {
@@ -550,7 +601,7 @@ static void shape_block(float x, float w, float *py) {
                 else app_toast("Couldn't read that image");
             }
         }
-        IMG_DD.on = true; IMG_DD.r = rect(x + 84, y, w - 84 - 36, 30);   // drawn last, over what follows
+        IMG_DD.on = true; IMG_DD.r = rect(x + 84, y, w - 84 - 36, 30); IMG_DD.name = app.tip_image;   // drawn last, over what follows
         y += 30 + 12;
         static const char *place[] = {"Stamps", "Along the line"};
         font_draw_in(ui.dl, F_UI, rect(x, y + 5, 76, 20), ALIGN_LEFT, "Place", C_TX3);
@@ -642,7 +693,7 @@ static void brush_editor(Rect r) {
     BrushPreset *p = &app.presets[i];
     static float scroll, content;
     static bool dirty;
-    static bool open[6] = {true, true, true, true, true, true};
+    static bool open[7] = {true, true, true, true, true, true, false};
     if (rect_has(r, ui.in.mouse) && ui_mouse_free() && ui.in.wheel_y != 0) scroll -= ui.in.wheel_y * 40;
     scroll = clampf(scroll, 0, MAX(0, content - r.h));
     float x = r.x + 16, w = r.w - 32, y = r.y + 12 - scroll;
@@ -673,10 +724,25 @@ static void brush_editor(Rect r) {
     y += 60 + 8;
 
     if (block("blk-shape", "Shape", x, w, &y, &open[0])) shape_block(x, w, &y);
+    if (block("blk-dual", "Dual tip", x, w, &y, &open[6])) dual_block(x, w, &y);
+    else DUAL_DD.on = false;
     if (block("blk-pressure", "Pressure", x, w, &y, &open[1])) {
         font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Pressure \xE2\x86\x92 size", C_TX3); y += 22;
-        curve_editor(rect(x, y, w, 104));
-        y += 104 + 4;
+        curve_editor(rect(x, y, w, 104), &app.curve, 0, "pressure");
+        y += 104 + 12;
+        // tilt: Clip Studio brushes that shade wider (or thinner) as the pen leans
+        Rect tc = {x, y, w, 28};
+        if (ui_chip("Pen tilt changes the size", tc, app.tilt_on)) {
+            app.tilt_on = !app.tilt_on;
+            if (app.tilt_on && app.tilt_curve.n < 2) app.tilt_curve = (Curve){2, {0, 1}, {1, 1}};
+        }
+        y += 28;
+        if (app.tilt_on) {
+            y += 10;
+            curve_editor(rect(x, y, w, 104), &app.tilt_curve, 1, "tilt");
+            y += 104;
+        }
+        y += 4;
     }
     if (block("blk-taper", "Taper", x, w, &y, &open[2])) {
         slider_row("taper-start", "Start", x, w, &y, &app.taper_s, 0, 100, "%d%%");
@@ -702,7 +768,8 @@ static void brush_editor(Rect r) {
     y += 16;
     delete_button(i, x, w, &y);
     if (tex_open) texture_block(x, w, &ty);   // after the blocks below it: its dropdown list goes over them
-    if (open[0]) image_dropdown(); else IMG_DD.on = false;
+    if (!open[0]) IMG_DD.on = false;
+    image_dropdown();
     y += 16;
     content = y + scroll - r.y;
     if (content > r.h) {

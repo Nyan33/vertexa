@@ -669,11 +669,16 @@ static void render_symbol(Frame *F, Doc *d, const Item *inst, int off, Mat m, fl
 }
 
 void render_stroke(Frame *F, const Item *it, Mat m, Color c) {
-    if (!it->img_mode || !it->img || !frame_push(F)) { brush_draw(frame_dl(F), it, m, c, false); return; }
+    bool img = it->img_mode && it->img, dual = it->dual_img != 0;
+    if ((!img && !dual) || it->erase || !frame_push(F)) { brush_draw(frame_dl(F), it, m, c, it->erase); return; }
     // the colour's alpha goes on the group, the stamps are drawn opaque-coloured
     float a = ((c >> 24) & 255) / 255.0f;
     brush_image_pipe(PIPE_MAX);
     brush_draw(frame_dl(F), it, m, c | 0xff000000u, false);
+    if (dual && frame_push(F)) {   // the dual tip's stamps, kept where they are: the stroke only shows there
+        brush_draw_dual(frame_dl(F), it, m);
+        frame_pop(F, BLEND_ALPHA, 1);
+    }
     brush_image_pipe(PIPE_NORMAL);
     frame_pop(F, BLEND_NORMAL, a);
 }
@@ -685,7 +690,7 @@ void render_items(Frame *F, Doc *d, Drawing *dr, int off, Mat m, float alpha, Co
         DrawList *dl = frame_dl(F);
         if (it->kind == IT_STROKE) {
             if (it->erase && tint) continue;
-            if (it->img_mode && it->img && !it->erase) render_stroke(F, it, m, item_color(it->color, alpha, tint));
+            if (((it->img_mode && it->img) || it->dual_img) && !it->erase) render_stroke(F, it, m, item_color(it->color, alpha, tint));
             else brush_draw(dl, it, m, it->erase ? 0xffffffffu : item_color(it->color, alpha, tint), it->erase);
         } else if (it->kind == IT_FILL) {
             if (it->erase && tint) continue;

@@ -28,6 +28,11 @@ typedef struct {
     u8 img_mode, img_flags;
     float img_spacing;   // IMG_STAMPS: distance between stamps, in tip diameters
     float img_w0, img_w1;   // width across the image with no / full pressure (1 = the image's own proportions)
+    int dual;            // a second tip image (bitmap id) that masks the stroke, 0: none
+    float dual_spacing, dual_angle, dual_scale;   // in its own tip diameters, radians, against the stroke's size
+    u8 dual_flags;
+    bool tilt_on;        // pen tilt changes the size through tilt_curve (x: 0 upright .. 1 lying flat)
+    Curve tilt_curve;
     Color color;
     u8 erase;
     float unit;          // document units per screen pixel
@@ -62,5 +67,6 @@ typedef u32 (*BrushTexFn)(int bitmap, int *w, int *h);
 void brush_texture_source(BrushTexFn fn);
 void stroke_set_texture(Stroke *s, int bitmap, float density, float scale);   // 0: none
 void stroke_set_image(Stroke *s, const BrushOpts *o);
-void brush_image_pipe(u8 pipe);   // how image strokes blend: PIPE_NORMAL, or PIPE_MAX inside a stroke's own group   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
+void brush_image_pipe(u8 pipe);
+bool brush_draw_dual(DrawList *dl, const Stroke *st, Mat m);   // the dual tip's stamps (white, for a mask)   // how image strokes blend: PIPE_NORMAL, or PIPE_MAX inside a stroke's own group   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
 SPt *brush_resample(const Stroke *st, float step);   // dense centerline (scratch array, valid until the next call)

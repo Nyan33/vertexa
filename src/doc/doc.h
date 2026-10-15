@@ -66,6 +66,9 @@ typedef struct {
     float img_r0, img_r1, img_w0, img_w1;   // width across the image: w0 where the radius is r0 (no pressure),
                                             // w1 where it is r1 (full pressure), in between by the radius
     u8 img_mode, img_flags;  // IMG_*, IMGF_*
+    int dual_img;            // a second image whose stamps mask the stroke (Clip Studio's dual brush), 0: none
+    float dual_gap, dual_angle, dual_scale;   // its spacing (drawing units), angle (radians), size against the stroke's
+    u8 dual_flags;           // IMGF_*
     float bx0, by0, bx1, by1;   // bounds in drawing space (strokes and fills)
 } Item;
 

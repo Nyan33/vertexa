@@ -4,8 +4,8 @@
 // instead of bundling SQLite.
 // Effector blobs (the pressure / tilt / velocity / random dynamics of a setting) are big-endian:
 //   u32 header size (44), u32 available inputs, u32 enabled inputs (0x10 pressure, 0x20 tilt, 0x40 velocity,
-//   0x80 random), u32 minimum %, ..., u32 size of the pressure curve block (at byte 32), ...
-// followed by curve blocks: u32 12, u32 count, u32 16, count x (f64 x, f64 y). The first one is pressure.
+//   0x80 random), u32 minimum %, ..., u32 sizes of the pressure and tilt curve blocks (at bytes 32 and 36), ...
+// followed by those curve blocks: u32 12, u32 count, u32 16, count x (f64 x, f64 y): pressure, then tilt.
 #include "app/app.h"
 #include <windows.h>
 
@@ -72,7 +72,7 @@ static const u8 *blob(Row *r, const char *name, int *len) {
 /* ── effectors ── */
 
 enum { IN_PRESSURE = 0x10, IN_TILT = 0x20, IN_VELOCITY = 0x40, IN_RANDOM = 0x80 };
-typedef struct { u32 inputs; float min; int n; float x[32], y[32]; } Effector;
+typedef struct { u32 inputs; float min; int n; float x[32], y[32]; int tn; float tx[32], ty[32]; } Effector;   // t*: tilt
 
 static u32 be32(const u8 *p) { return (u32)p[0] << 24 | (u32)p[1] << 16 | (u32)p[2] << 8 | p[3]; }
 static double be64f(const u8 *p) { u64 v = 0; for (int i = 0; i < 8; i++) v = v << 8 | p[i]; double d; memcpy(&d, &v, 8); return d; }
@@ -85,15 +85,21 @@ static bool effector(const u8 *b, int n, Effector *e) {
     e->inputs = be32(b + 8);
     e->min = clampf(be32(b + 12) / 100.0f, 0, 1);
     size_t at = hl;
-    if (be32(b + 32) && at + 12 <= (size_t)n && be32(b + at) == 12 && be32(b + at + 8) == 16) {
+    for (int blk = 0; blk < 2; blk++) {   // pressure, tilt
+        u32 bsize = hl >= 40 ? be32(b + 32 + 4 * blk) : 0;
+        if (!bsize) continue;
+        if (at + 12 > (size_t)n || be32(b + at) != 12 || be32(b + at + 8) != 16) break;
         u32 cnt = be32(b + at + 4);
-        at += 12;
-        for (u32 i = 0; i < cnt && e->n < 32 && at + 16 <= (size_t)n; i++, at += 16) {
-            double x = be64f(b + at), y = be64f(b + at + 8);
+        int *cn = blk ? &e->tn : &e->n;
+        float *cx = blk ? e->tx : e->x, *cy = blk ? e->ty : e->y;
+        size_t p = at + 12;
+        for (u32 i = 0; i < cnt && *cn < 32 && p + 16 <= (size_t)n; i++, p += 16) {
+            double x = be64f(b + p), y = be64f(b + p + 8);
             if (!(x == x) || !(y == y)) break;   // NaN: not a curve after all
-            e->x[e->n] = clampf((float)x, 0, 1); e->y[e->n] = clampf((float)y, 0, 1);
-            e->n++;
+            cx[*cn] = clampf((float)x, 0, 1); cy[*cn] = clampf((float)y, 0, 1);
+            (*cn)++;
         }
+        at += bsize;
     }
     return true;
 }
@@ -215,8 +221,15 @@ static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx)
         p->smoothing = 50;
         Effector e;
         b = blob(&r, "BrushSizeEffector", &len);
-        if (effector(b, len, &e) && (e.inputs & IN_PRESSURE)) p->curve = csp_curve(&e);
+        bool eff = effector(b, len, &e);
+        if (eff && (e.inputs & IN_PRESSURE)) p->curve = csp_curve(&e);
         else p->curve = (Curve){2, {0, 1}, {1, 1}};   // size ignores pressure
+        if (eff && (e.inputs & IN_TILT) && e.tn >= 2) {   // size by pen tilt, on top of pressure
+            Effector t = {0};
+            t.n = e.tn; memcpy(t.x, e.tx, sizeof(t.x)); memcpy(t.y, e.ty, sizeof(t.y));
+            p->tilt = csp_curve(&t);
+            p->tilt_on = true;
+        }
         float thick = num(&r, "BrushThickness", 100);
         p->tip = thick < 99.5f ? TIP_OVAL : TIP_ROUND;
         p->aspect = p->tip == TIP_OVAL ? clampf(thick / 100, 0.05f, 1) : 1;
@@ -254,6 +267,30 @@ static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx)
                 if (p->img_mode == IMG_STAMPS && p->img_spacing >= 50) p->taper_s = p->taper_e = 0;
                 // the angle turns with the line only when the rotation follows its direction (0x40)
                 if (!((int)num(&r, "BrushRotationEffector", 0) & 0x40)) p->img_flags |= IMGF_FIXED;
+                // the dual brush: a second tip whose stamps mask the stroke
+                const u8 *dpat = num(&r, "UseDualBrush", 0) != 0 && num(&r, "DualUsePatternImage", 0) != 0 ? blob(&r, "DualPatternImageArray", &len) : NULL;
+                if (dpat && len > 0) {
+                    bool same = len == plen && !memcmp(dpat, copy, (size_t)len);
+                    char dbase[64];
+                    snprintf(dbase, sizeof(dbase), "%.56s dual", base);
+                    if (same) snprintf(p->dual_image, sizeof(p->dual_image), "%s", p->tip_image);
+                    else {
+                        u8 *dcopy = malloc((size_t)len);
+                        memcpy(dcopy, dpat, (size_t)len);
+                        if (!tip_image(db, dcopy, len, dbase, p->dual_image, sizeof(p->dual_image))) p->dual_image[0] = 0;
+                        free(dcopy);
+                    }
+                    if (p->dual_image[0]) {
+                        float bs = MAX(1, num(&r, "BrushSize", 10));
+                        p->dual_on = true;
+                        p->dual_spacing = clampf(num(&r, "DualInterval", 10), 1, 300);
+                        float drot = num(&r, "DualRotation", 0);
+                        p->dual_angle = roundf(fmodf(fmodf(drot, 360) + 360, 360));
+                        p->dual_scale = num(&r, "SyncDualBrushSize", 0) != 0 ? 100 : clampf(num(&r, "DualSize", bs) / bs * 100, 5, 400);
+                        p->dual_flags = ((int)num(&r, "DualRotationEffector", 0) & 0x40) ? 0 : IMGF_FIXED;
+                        *approx |= 32;
+                    }
+                }
                 *approx |= 16;
             } else *approx |= 1;
             free(copy);
@@ -316,18 +353,8 @@ bool import_sut(const char *path, char *msg, int cap) {
     app_apply_preset(first);
     app.right_tab = 0;
     if (!app_tool_paints(app.tool) || app.tool == 'E') app.tool = 'B';
-    char what[160];
-    if (added == 1) {
-        static const char *tips[] = {"round", "oval", "square"};
-        bool flat = true;
-        for (int k = 0; k < last.curve.n; k++) flat &= last.curve.y[k] > 0.99f;
-        snprintf(what, sizeof(what), "Imported \"%s\": %d px, %s tip%s", last.name, (int)last.size, last.img_mode ? "image" : tips[last.tip],
-                 flat ? "" : ", pressure curve");
-    } else snprintf(what, sizeof(what), "Imported %d brushes from %s", added, fallback);
-    if (approx & 16) snprintf(msg, (size_t)cap, "%s (the image from its preview)%s", what,
-                              approx & 8 ? ". Watercolor mixing is left out" : approx & 4 ? ". Spray is left out" : "");
-    else if (approx & 15) snprintf(msg, (size_t)cap, "%s. %s drawn as a solid vector tip", what,
-                                   approx & 3 ? "texture" : approx & 4 ? "spray" : "watercolor");
-    else snprintf(msg, (size_t)cap, "%s", what);
+    (void)approx;
+    if (added == 1) snprintf(msg, (size_t)cap, "Imported \"%s\"", last.name);
+    else snprintf(msg, (size_t)cap, "Imported %d brushes", added);
     return true;
 }

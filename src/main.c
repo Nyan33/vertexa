@@ -194,6 +194,7 @@ static void selftest_brushes(int f) {
             bool ok = app_open_path(path);
             BrushPreset *p = &app.presets[app.preset];
             vx_log("selftest: %s", app.toast);
+            vx_log("selftest: tilt %d (%d points), dual %d \"%s\" spacing %.0f angle %.0f size %.0f flags %d", p->tilt_on, p->tilt.n, p->dual_on, p->dual_image, p->dual_spacing, p->dual_angle, p->dual_scale, p->dual_flags);
             vx_log("selftest: import %s: \"%s\" size %.0f, image \"%s\" mode %d spacing %.1f angle %.0f flags %d widths %.0f %.0f tapers %.0f %.0f", ok ? "ok" : "FAILED", p->name,
                    p->size, p->tip_image, p->img_mode, p->img_spacing, p->angle, p->img_flags, p->img_w0, p->img_w1, p->taper_s, p->taper_e);
             app.fill = hex(M.page == 6 ? 0x9aa3a6 : 0xe0141e);
@@ -202,17 +203,27 @@ static void selftest_brushes(int f) {
         }
         if (f == 6) {
             for (int k = 0; k < 7; k++) {   // a wave, a grid and loops, pressure rising then falling
-                V2 pts[60]; float pr[60]; int n = 0;
+                V2 pts[60]; float pr[60], tl[60]; int n = 0;
                 for (int i = 0; i < 60; i++) {
                     float t = i / 59.0f, x, y;
                     if (k == 0) { x = 120 + t * 500; y = 120 + sinf(t * 18) * 25; }
                     else if (k < 4) { x = 700 + (k - 1) * 70; y = 80 + t * 260; }
                     else if (k < 6) { x = 680 + t * 260; y = 120 + (k - 4) * 120; }
                     else { x = 300 + cosf(t * 9) * 120 + t * 300; y = 450 + sinf(t * 9) * 90; }
-                    pts[n] = v2(x, y); pr[n] = sinf(t * 3.14159f) * 0.95f + 0.05f; n++;
+                    pts[n] = v2(x, y); pr[n] = sinf(t * 3.14159f) * 0.95f + 0.05f; tl[n] = k % 2 ? 50 : 15; n++;
                 }
-                st_test_stroke(pts, pr, n);
+                st_test_stroke(pts, pr, tl, n);   // odd strokes with the pen leaning 50 degrees
             }
+        }
+        if (f == 8) {
+            Drawing *dr = st_drawing(false);
+            char line[256] = ""; int at = 0;
+            for (ptrdiff_t q = 0; dr && q < arrlen(dr->items); q++) {
+                float rm = 0;
+                for (ptrdiff_t k = 0; k < arrlen(dr->items[q].pts); k++) rm = MAX(rm, dr->items[q].pts[k].r);
+                at += snprintf(line + at, sizeof(line) - at, " %.0f", rm);
+            }
+            vx_log("selftest: widest radius per stroke:%s", line);
         }
         if (f == 10) in_move(v2(700, 700));
     } else if (M.page == 5) {   // --selftest=csp-tip: a Clip Studio feather brush (image tip), a short and a long stroke
@@ -228,17 +239,17 @@ static void selftest_brushes(int f) {
             for (int k = 0; k < 4; k++) {
                 V2 pts[6]; float pr[6];
                 for (int i = 0; i < 6; i++) { pts[i] = v2(160 + k * 250 + i * 8, 470 + i * 2); pr[i] = 0.05f + k * 0.3f; }
-                st_test_stroke(pts, pr, 6);
+                st_test_stroke(pts, pr, NULL, 6);
             }
             V2 pts[40]; float pr[40];
             for (int i = 0; i < 40; i++) { float t = i / 39.0f; pts[i] = v2(150 + t * 980, 640 - sinf(t * 3.1f) * 60); pr[i] = 0.2f + 0.6f * sinf(t * 3.1f); }
-            st_test_stroke(pts, pr, 40);
+            st_test_stroke(pts, pr, NULL, 40);
         }
         if (f == 20) {   // the same image laid along a line
             app.img_mode = IMG_ALONG;
             V2 pts[30]; float pr[30];
             for (int i = 0; i < 30; i++) { float t = i / 29.0f; pts[i] = v2(300 + t * 700, 130 + sinf(t * 3.1f) * 50); pr[i] = 0.1f; }
-            st_test_stroke(pts, pr, 30);
+            st_test_stroke(pts, pr, NULL, 30);
         }
         if (f == 26) {
             static const char *vxa = "D:/Programming/Vertexa/research/tmp/image_stroke.vxa";

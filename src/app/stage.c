@@ -159,6 +159,10 @@ static BrushOpts opts_for(char tool) {
         o.img = app.img_mode && app.tip_image[0] ? tipimg_bitmap(app.tip_image) : 0;
         o.img_mode = o.img ? app.img_mode : IMG_NONE; o.img_flags = app.img_flags; o.img_spacing = app.img_spacing / 100;
         o.img_w0 = app.img_w0 / 100; o.img_w1 = app.img_w1 / 100;
+        o.tilt_on = app.tilt_on; o.tilt_curve = app.tilt_curve;
+        o.dual = app.dual_on && app.dual_image[0] ? tipimg_bitmap(app.dual_image) : 0;
+        o.dual_spacing = app.dual_spacing / 100; o.dual_angle = app.dual_angle * VX_PI / 180;
+        o.dual_scale = app.dual_scale / 100; o.dual_flags = app.dual_flags;
         o.color = col_alpha(app.fill, app.alpha * app.brush_opacity / 100);
     }
     return o;
@@ -187,10 +191,10 @@ static void finish_stroke(void) {
 }
 
 // self-tests: a brush stroke through drawing-space points with a pen pressure each, as if drawn
-void st_test_stroke(const V2 *pts, const float *pressure, int n) {
+void st_test_stroke(const V2 *pts, const float *pressure, const float *tilt, int n) {
     Builder b;
     bb_begin(&b, opts_for('B'));
-    for (int i = 0; i < n; i++) bb_add(&b, pts[i].x, pts[i].y, pressure[i], 0);
+    for (int i = 0; i < n; i++) bb_add(&b, pts[i].x, pts[i].y, pressure[i], tilt ? tilt[i] : 0);
     Stroke st = bb_finish(&b);
     Drawing *dr = st_drawing(true);
     if (!dr || !arrlen(st.pts)) { item_free(&st); return; }

@@ -33,12 +33,14 @@ static void preset_line(FILE *f, const BrushPreset *p) {
     int taper = (p->taper_s > 0 ? TAPER_START : 0) | (p->taper_e > 0 ? TAPER_END : 0);
     fprintf(f, "%s\t%g %g %d %g %g %d |", p->name, p->size, p->smoothing, p->tip, p->angle, p->aspect, taper);
     for (int k = 0; k < p->curve.n; k++) fprintf(f, " %g,%g", p->curve.x[k], p->curve.y[k]);
-    fprintf(f, "\topacity=%g fit=%g taper_start=%g taper_end=%g density=%g scale=%g image=%d spacing=%g flags=%d width_light=%g width_heavy=%g\t%s\t%s\n",
+    fprintf(f, "\topacity=%g fit=%g taper_start=%g taper_end=%g density=%g scale=%g image=%d spacing=%g flags=%d width_light=%g width_heavy=%g",
             p->opacity, p->fit, p->taper_s, p->taper_e, p->tex_density, p->tex_scale, p->img_mode, p->img_spacing, p->img_flags,
-            p->img_w0, p->img_w1,
-            p->texture, p->tip_image);
+            p->img_w0, p->img_w1);
+    fprintf(f, " dual=%d dual_spacing=%g dual_angle=%g dual_scale=%g dual_flags=%d", p->dual_on, p->dual_spacing, p->dual_angle, p->dual_scale, p->dual_flags);
+    if (p->tilt_on) { fprintf(f, " tilt="); for (int k = 0; k < p->tilt.n; k++) fprintf(f, "%s%g,%g", k ? "/" : "", p->tilt.x[k], p->tilt.y[k]); }
+    fprintf(f, "\t%s\t%s\t%s\n", p->texture, p->tip_image, p->dual_image);
 }
-#define PRESET_HEADER "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y<TAB>key=value ...<TAB>texture<TAB>tip image\n"
+#define PRESET_HEADER "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y<TAB>key=value ...<TAB>texture<TAB>tip image<TAB>dual tip image\n"
 
 void app_presets_save(void) {
     char path[1024];
@@ -60,8 +62,8 @@ static bool parse_preset(char *line, BrushPreset *p) {
     *tab = 0;
     memset(p, 0, sizeof(*p));
     p->user = true;
-    char *ext = strchr(tab + 1, '\t'), *tex = NULL, *img = NULL;
-    if (ext) { *ext++ = 0; tex = strchr(ext, '\t'); if (tex) { *tex++ = 0; img = strchr(tex, '\t'); if (img) *img++ = 0; } }
+    char *ext = strchr(tab + 1, '\t'), *tex = NULL, *img = NULL, *dimg = NULL;
+    if (ext) { *ext++ = 0; tex = strchr(ext, '\t'); if (tex) { *tex++ = 0; img = strchr(tex, '\t'); if (img) { *img++ = 0; dimg = strchr(img, '\t'); if (dimg) *dimg++ = 0; } } }
     int tip = 0, taper = 0;
     char *bar = strchr(tab + 1, '|');
     if (bar) {
@@ -86,8 +88,22 @@ static bool parse_preset(char *line, BrushPreset *p) {
     p->aspect = clampf(p->aspect, 0.05f, 1);
     p->taper_s = taper & TAPER_START ? 50 : 0; p->taper_e = taper & TAPER_END ? 50 : 0;
     p->opacity = 100; p->fit = p->smoothing; p->tex_density = 60; p->tex_scale = 100; p->img_spacing = 80; p->img_w0 = p->img_w1 = 100;
+    p->dual_spacing = 10; p->dual_scale = 100;
     for (char *t = ext ? strtok(ext, " \r\n") : NULL; t; t = strtok(NULL, " \r\n")) {
         char key[32]; float v;
+        if (!strncmp(t, "tilt=", 5)) {   // x,y/x,y/...
+            Curve c = {0};
+            float lastx = -1;
+            for (char *q = t + 5; *q && c.n < CURVE_MAX;) {
+                float x, y; int used = 0;
+                if (sscanf(q, "%f,%f%n", &x, &y, &used) != 2) break;
+                if (x > lastx) { c.x[c.n] = clampf(x, 0, 1); c.y[c.n] = clampf(y, 0, 1); c.n++; lastx = x; }
+                q += used;
+                if (*q == '/') q++;
+            }
+            if (c.n >= 2) { c.x[0] = 0; c.x[c.n - 1] = 1; p->tilt = c; p->tilt_on = true; }
+            continue;
+        }
         if (sscanf(t, "%31[^=]=%f", key, &v) != 2) continue;
         if (!strcmp(key, "opacity")) p->opacity = clampf(v, 1, 100);
         else if (!strcmp(key, "fit")) p->fit = clampf(v, 0, 100);
@@ -100,10 +116,17 @@ static bool parse_preset(char *line, BrushPreset *p) {
         else if (!strcmp(key, "flags")) p->img_flags = (u8)((int)v & 7);
         else if (!strcmp(key, "width_light")) p->img_w0 = clampf(v, 2, 300);
         else if (!strcmp(key, "width_heavy")) p->img_w1 = clampf(v, 2, 300);
+        else if (!strcmp(key, "dual")) p->dual_on = v != 0;
+        else if (!strcmp(key, "dual_spacing")) p->dual_spacing = clampf(v, 1, 500);
+        else if (!strcmp(key, "dual_angle")) p->dual_angle = fmodf(v, 360);
+        else if (!strcmp(key, "dual_scale")) p->dual_scale = clampf(v, 5, 400);
+        else if (!strcmp(key, "dual_flags")) p->dual_flags = (u8)((int)v & 7);
     }
     if (tex) { tex[strcspn(tex, "\r\n")] = 0; snprintf(p->texture, sizeof(p->texture), "%s", tex); }
     if (img) { img[strcspn(img, "\r\n")] = 0; snprintf(p->tip_image, sizeof(p->tip_image), "%s", img); }
     if (!p->tip_image[0]) p->img_mode = IMG_NONE;
+    if (dimg) { dimg[strcspn(dimg, "\r\n")] = 0; snprintf(p->dual_image, sizeof(p->dual_image), "%s", dimg); }
+    if (!p->dual_image[0]) p->dual_on = false;
     return true;
 }
 
@@ -240,6 +263,11 @@ void app_apply_preset(int i) {
     snprintf(app.tip_image, sizeof(app.tip_image), "%s", p->tip_image);
     app.img_mode = p->img_mode; app.img_flags = p->img_flags; app.img_spacing = p->img_spacing > 0 ? p->img_spacing : 80;
     app.img_w0 = p->img_w0 > 0 ? p->img_w0 : 100; app.img_w1 = p->img_w1 > 0 ? p->img_w1 : 100;
+    app.tilt_on = p->tilt_on && p->tilt.n >= 2;
+    app.tilt_curve = app.tilt_on ? p->tilt : (Curve){2, {0, 1}, {1, 1}};
+    app.dual_on = p->dual_on; snprintf(app.dual_image, sizeof(app.dual_image), "%s", p->dual_image);
+    app.dual_spacing = p->dual_spacing > 0 ? p->dual_spacing : 10; app.dual_angle = p->dual_angle;
+    app.dual_scale = p->dual_scale > 0 ? p->dual_scale : 100; app.dual_flags = p->dual_flags;
 }
 
 void app_init(void) {

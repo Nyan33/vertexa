@@ -79,6 +79,9 @@ bool doc_save(Doc *d, const char *path) {
             for (ptrdiff_t q = 0; q < arrlen(it->stops); q++) { putf(&b, it->stops[q].pos); put32(&b, it->stops[q].c); }
             put32(&b, (u32)it->img); putf(&b, it->img_gap);   // 6
             putf(&b, it->img_r0); putf(&b, it->img_r1); putf(&b, it->img_w0); putf(&b, it->img_w1);
+            put32(&b, (u32)it->dual_img); putf(&b, it->dual_gap); putf(&b, it->dual_angle); putf(&b, it->dual_scale);
+            u8 dl[4] = {it->dual_flags, 0, 0, 0};
+            put(&b, dl, 4);
             u8 im[4] = {it->img_mode, it->img_flags, 0, 0};
             put(&b, im, 4);
         }
@@ -114,9 +117,9 @@ bool doc_save(Doc *d, const char *path) {
     for (ptrdiff_t i = 0; i < arrlen(d->drawings); i++)
         for (ptrdiff_t k = 0; d->drawings[i].used && k < arrlen(d->drawings[i].items); k++) {
             Item *it = &d->drawings[i].items[k];
-            int use[2] = {(it->kind == IT_BITMAP || it->kind == IT_FILL || (it->kind == IT_STROKE && it->texture)) ? it->sym : 0,
-                          it->kind == IT_STROKE ? it->img : 0};
-            for (int u = 0; u < 2; u++) {
+            int use[3] = {(it->kind == IT_BITMAP || it->kind == IT_FILL || (it->kind == IT_STROKE && it->texture)) ? it->sym : 0,
+                          it->kind == IT_STROKE ? it->img : 0, it->kind == IT_STROKE ? it->dual_img : 0};
+            for (int u = 0; u < 3; u++) {
                 if (!use[u] || !bitmap_get(use[u])) continue;
                 bool seen = false;
                 for (ptrdiff_t q = 0; q < arrlen(bms); q++) seen |= bms[q] == use[u];
@@ -255,6 +258,9 @@ Doc *doc_load(const char *path, char *err, int errcap) {
             if (file_ver >= 6) {
                 it.img = (int)get32(&r); it.img_gap = getf(&r);
                 it.img_r0 = getf(&r); it.img_r1 = getf(&r); it.img_w0 = getf(&r); it.img_w1 = getf(&r);
+                it.dual_img = (int)get32(&r); it.dual_gap = getf(&r); it.dual_angle = getf(&r); it.dual_scale = getf(&r);
+                u8 dl[4]; get(&r, dl, 4);
+                it.dual_flags = dl[0];
                 u8 im[4]; get(&r, im, 4);
                 it.img_mode = im[0] <= IMG_ALONG ? im[0] : IMG_NONE; it.img_flags = im[1];
                 if (!it.img_mode) it.img = 0;
@@ -328,6 +334,11 @@ Doc *doc_load(const char *path, char *err, int errcap) {
         for (ptrdiff_t i = 0; i < arrlen(d->drawings); i++)
             for (ptrdiff_t k = 0; k < arrlen(d->drawings[i].items); k++) {
                 Item *it = &d->drawings[i].items[k];
+                if (it->kind == IT_STROKE && it->dual_img) {
+                    int to = 0;
+                    for (ptrdiff_t q = 0; q < arrlen(map); q++) if (map[q].from == it->dual_img) to = map[q].to;
+                    it->dual_img = to;
+                }
                 if (it->kind == IT_STROKE && it->img) {
                     int to = 0;
                     for (ptrdiff_t q = 0; q < arrlen(map); q++) if (map[q].from == it->img) to = map[q].to;
