@@ -37,23 +37,49 @@ void plat_toggle_maximize(void) { ShowWindow(W.hwnd, IsZoomed(W.hwnd) ? SW_RESTO
 bool plat_maximized(void) { return IsZoomed(W.hwnd) != 0; }
 void plat_close(void) { PostMessageW(W.hwnd, WM_CLOSE, 0, 0); }
 
+/* Pen positions. Windows gives whole pixels (ptPixelLocation, where the driver really maps the pen) and
+   the tablet's own units (ptHimetricLocation, much finer). How the driver maps the tablet onto the screen
+   (kept proportions, a part of the tablet, several monitors) isn't something the device rectangles tell
+   reliably, so the fine units are fitted to the pixels as the pen moves: a straight line per axis, by least
+   squares. The fit is used once it has seen enough movement and agrees with the pixels within a pixel;
+   until then, or if the mapping changes, the pixels are used as they are. */
+typedef struct { double n, sh, sp, shh, shp; } PenFit;
+static struct { PenFit ax[2]; HANDLE device; } PF;
+
+static void fit_reset(void) { memset(PF.ax, 0, sizeof(PF.ax)); }
+static void fit_add(PenFit *f, double h, double p) { f->n++; f->sh += h; f->sp += p; f->shh += h * h; f->shp += h * p; }
+static bool fit_map(const PenFit *f, double h, double *out) {
+    if (f->n < 24) return false;
+    double mh = f->sh / f->n, mp = f->sp / f->n, var = f->shh / f->n - mh * mh;
+    if (var <= 1e-6) return false;
+    double slope = (f->shp / f->n - mh * mp) / var;
+    double spread = sqrt(var) * fabs(slope);   // how far the pen has moved, in pixels
+    if (spread < 40) return false;
+    *out = mp + slope * (h - mh);
+    return true;
+}
+
 static void push_pen(UINT32 id) {
     UINT32 count = 0;
     if (!GetPointerPenInfoHistory(id, &count, NULL) || !count) return;
     POINTER_PEN_INFO hist[64];
     count = MIN(count, 64);
     if (!GetPointerPenInfoHistory(id, &count, hist)) return;
-    RECT dev, disp;
-    bool mapped = GetPointerDeviceRects(hist[0].pointerInfo.sourceDevice, &dev, &disp) && dev.right > dev.left && dev.bottom > dev.top;
+    if (hist[0].pointerInfo.sourceDevice != PF.device) { PF.device = hist[0].pointerInfo.sourceDevice; fit_reset(); }
     POINT origin = {0, 0};
     ClientToScreen(W.hwnd, &origin);
     for (int i = (int)count - 1; i >= 0; i--) {   // history is newest first
         POINTER_PEN_INFO *p = &hist[i];
-        float sx, sy;
-        if (mapped) {
-            sx = disp.left + (p->pointerInfo.ptHimetricLocation.x - dev.left) * (float)(disp.right - disp.left) / (dev.right - dev.left);
-            sy = disp.top + (p->pointerInfo.ptHimetricLocation.y - dev.top) * (float)(disp.bottom - disp.top) / (dev.bottom - dev.top);
-        } else { sx = (float)p->pointerInfo.ptPixelLocation.x; sy = (float)p->pointerInfo.ptPixelLocation.y; }
+        double px = p->pointerInfo.ptPixelLocation.x, py = p->pointerInfo.ptPixelLocation.y;
+        double hx = p->pointerInfo.ptHimetricLocation.x, hy = p->pointerInfo.ptHimetricLocation.y;
+        double fx, fy;
+        float sx = (float)px, sy = (float)py;
+        if (fit_map(&PF.ax[0], hx, &fx) && fit_map(&PF.ax[1], hy, &fy)) {
+            if (fabs(fx - px) <= 1.5 && fabs(fy - py) <= 1.5) { sx = (float)fx; sy = (float)fy; }
+            else if (fabs(fx - px) > 4 || fabs(fy - py) > 4) fit_reset();   // the mapping changed: learn it again
+        }
+        fit_add(&PF.ax[0], hx, px);
+        fit_add(&PF.ax[1], hy, py);
         bool contact = (p->pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) != 0;
         PenSample s = {
             .x = (sx - origin.x) / W.scale, .y = (sy - origin.y) / W.scale,
