@@ -1,60 +1,53 @@
 # Vertexa Alpha 2.0
 
-Vertexa переписана с нуля: вместо C++20 и Qt 6 теперь C17, sokol (Direct3D 11) и собственный интерфейс,
-который целиком рисуется на видеокарте. Формат файлов новый (`.vxa`), документы старой версии
-(`.vtx`) не открываются. Сборка пока только под Windows.
+Vertexa has been rewritten from scratch: C17 and sokol (Direct3D 11) instead of C++20 and Qt 6, with its own
+interface drawn entirely on the GPU. Documents use a new format (`.vxa`). Windows only for now.
 
-## Новое по сравнению со старой Vertexa
+## What's new compared with the old Vertexa
 
-**Интерфейс**
-- Новый тёмный интерфейс по макету: таймлайн на пиксельной сетке, панели, палитра, своя строка заголовка.
-- Стартовый экран с последними проектами и превью, заставка при загрузке.
-- Документы во вкладках: перетаскивание, закрытие средней кнопкой или `Ctrl+W`, вопрос о сохранении.
-- Настройки: автосохранение и резервные копии, число шагов отмены, размер интерфейса, выбор видеокарты,
-  сглаживание и разрешение сцены, переназначаемые горячие клавиши, редактор цветов темы с пресетами.
-- Свой набор курсоров: стрелка в виде буквы V из логотипа, руки в стиле macOS, курсоры инструментов.
+**Interface**
+- A new dark interface: a timeline on a pixel grid, panels, a palette and a custom title bar.
+- A start screen with recent projects and thumbnails, and a splash screen while loading.
+- Documents in tabs: drag to reorder, close with the middle button or `Ctrl+W`, a prompt before losing changes.
+- Settings: auto-save and recovery copies, undo steps, interface size, graphics card choice, stage
+  anti-aliasing and resolution, rebindable shortcuts, a theme color editor with presets.
+- A custom cursor set: an arrow shaped like the V of the logo, macOS-style hands, tool cursors.
 
-**Рисование**
-- Векторная кисть в стиле Flash: стабилизатор, кривая нажима с точками, наклон, сужения, три формы кончика.
-- Импорт кистей Clip Studio Paint (`.sut`).
-- Trim Edge (`C`): обрезка штриха до ближайших пересечений щелчком или протягиванием.
-- Выделение как в Umoupen: выбирается сам вектор, целиком или кусок между пересечениями; рамка и лассо режут штрихи.
-- Free Transform с перемещаемой точкой трансформации, Subselection по узлам.
+**Drawing**
+- A Flash-style vector brush: stabilizer, pressure curve with editable points, tilt, tapers, three tip shapes.
+- Clip Studio Paint brush import (`.sut`).
+- Trim Edge (`C`): cuts a stroke back to the nearest intersections with a click or a drag.
+- Umoupen-style selection: the vector itself is picked, whole or just the piece between intersections;
+  the box and the lasso cut strokes.
+- Free Transform with a movable transformation point, Subselection of nodes.
 
-**Анимация**
-- Shape tween между любыми двумя рисунками, classic tween.
-- Слой камеры с рамкой на сцене (сдвиг, зум, поворот) и экспортом через камеру.
-- Аудиослои (WAV, MP3, OGG) с волной и воспроизведением в такт; звук хранится внутри файла.
-- Множественное выделение кадров и слоёв (Ctrl / Shift), перетаскивание кадров, слоёв и папок.
+**Animation**
+- Shape tweens between any two drawings, classic tweens.
+- A camera layer with a frame on the stage (move, zoom, rotate) and export through the camera.
+- Audio layers (WAV, MP3, OGG) with waveforms and playback in sync; the sound is stored in the file.
+- Multiple selection of frames and layers (Ctrl / Shift), dragging frames, layers and folders.
 
-**Сцена и композитинг**
-- Все 14 режимов наложения Animate на слоях, символах и картинках, маски.
-- Фильтры (Blur, Glow, Drop Shadow, Adjust Color) и цветовые эффекты (яркость, тинт, Advanced).
-- Градиентные и растровые заливки.
-- Полупрозрачные слои Animate (Shift-клик по глазу): видны на сцене, в экспорт не идут.
+**Stage and compositing**
+- All 14 Animate blend modes on layers, symbols and bitmaps; masks.
+- Filters (Blur, Glow, Drop Shadow, Adjust Color) and color effects (brightness, tint, advanced).
+- Gradient and bitmap fills.
+- Animate's see-through layers (Shift-click the eye): shown on the stage, left out of exports.
 
-**Картинки**
-- Импорт PNG, JPEG и других изображений (`Ctrl+R` или перетаскиванием на сцену), библиотека с превью.
+**Images**
+- PNG, JPEG and other images can be imported (`Ctrl+R` or drop on the stage); a library with thumbnails.
 
-**Импорт FLA**
-- Картинки из FLA (JPEG и форматы Animate без потерь), градиенты, фильтры, цветовые эффекты,
-  режимы наложения, маски, полупрозрачные слои.
-- Пути к файлам с кириллицей.
+**FLA import**
+- Bitmaps from FLA files (JPEG and Animate's lossless formats), gradients, filters, color effects,
+  blend modes, masks and see-through layers.
+- File paths with non-Latin characters.
 
-**Экспорт для FNF**
-- Окно Export Symbols: выбранные в библиотеке символы становятся анимациями персонажа.
-- Форматы Sparrow, FNF V-Slice и Psych Engine; ID, масштаб, позиция, имя анимации, префикс, FPS, повтор и офсеты
-  с живым превью (точка ног, idle для сравнения, сдвиг стрелками).
-- Общая рамка кадров, как ожидает V-Slice, поэтому персонаж не прыгает между анимациями. Настройки хранятся в `.vxa`.
-- Экспорт PNG-последовательности.
+**FNF export**
+- The Export Symbols window: the symbols picked in the library become the character's animations.
+- Sparrow, FNF V-Slice and Psych Engine formats; ID, scale, position, animation name, prefix, FPS, loop and
+  offsets with a live preview (feet origin, idle reference, nudging with the arrow keys).
+- One shared frame box, as V-Slice expects, so the character doesn't jump between animations.
+  The settings are saved in the `.vxa`.
+- PNG sequence export.
 
-**Скорость**
-- Геометрия строится только для видимой части сцены, поэтому при сильном приближении FPS не падает.
-
-## Чего пока нет из старой версии
-
-- Сборок под macOS и Linux.
-- Pen, PolyStar, Ink Bottle, режимов ластика и faucet, текстурных, Art и Pattern кистей.
-- Кнопок, 9-slice, папок в библиотеке, shape hints, редактора изинга и motion guide.
-- Bevel и Gradient фильтров, экспорта в SVG и видео.
-- Открытия файлов `.vtx` старой версии.
+**Performance**
+- Geometry is built only for the visible part of the stage, so zooming in doesn't drop the frame rate.

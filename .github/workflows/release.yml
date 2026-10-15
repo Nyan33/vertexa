@@ -3,7 +3,8 @@ name: Build
 # Every push to main builds Vertexa for Windows and publishes it as a release, the way llama.cpp does:
 # the tag is bN (N = commits on main), the release is named after the commit and its notes are the commit
 # message. A tag that exists already is never moved or overwritten (a re-run of the same commit skips it).
-# The first release also carries CHANGELOG.md (what changed since the old Qt Vertexa). Pull requests only build.
+# The first release carries CHANGELOG.md (what changed since the old Qt Vertexa) and is updated when it changes.
+# Pull requests only build.
 on:
   push:
     branches: [main]
@@ -81,3 +82,15 @@ jobs:
           prerelease: false
           make_latest: true
           files: dist/Vertexa-windows-x64.zip
+
+      - name: Changelog into the first release
+        # the first release carries CHANGELOG.md; when the changelog changes, that release's notes follow it
+        if: github.event_name != 'pull_request' && steps.ver.outputs.skip != '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -qx CHANGELOG.md; then
+            first=$(git tag -l 'b*' --sort=v:refname | head -n1)
+            gh release edit "$first" --repo "$GITHUB_REPOSITORY" --notes-file CHANGELOG.md
+          fi
