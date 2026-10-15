@@ -170,6 +170,16 @@ static BrushOpts opts_for(char tool) {
 
 static void feed_samples(void) {
     if (!S.drawing) return;
+    if (plat_pen_logging()) {
+        V2 lm = st_local(ui.in.mouse);
+        plat_pen_log("stage frame: mouse %.1f %.1f -> drawing %.1f %.1f; %d pen samples%s; stage %.0f %.0f %.0f %.0f zoom %.3f offset %.1f %.1f",
+                     ui.in.mouse.x, ui.in.mouse.y, lm.x, lm.y, S.npen, S.npen ? "" : (plat_pen_in_range() ? " (pen in range)" : " (mouse)"),
+                     S.r.x, S.r.y, S.r.w, S.r.h, S.z, S.ox, S.oy);
+        for (int i = 0; i < S.npen; i++) {
+            V2 lp = st_local(v2(S.pen[i].x, S.pen[i].y));
+            plat_pen_log("  pen %.1f %.1f -> drawing %.1f %.1f, pressure %.2f", S.pen[i].x, S.pen[i].y, lp.x, lp.y, S.pen[i].pressure);
+        }
+    }
     if (S.npen) {
         for (int i = 0; i < S.npen; i++) { V2 p = st_local(v2(S.pen[i].x, S.pen[i].y)); bb_add(&S.b, p.x, p.y, S.pen[i].pressure, S.pen[i].tilt); }
     } else if (!plat_pen_in_range()) {

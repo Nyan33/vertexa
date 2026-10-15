@@ -33,6 +33,9 @@ void plat_remove(const char *path);
 bool plat_config_path(const char *file, char *out, int cap);
 void plat_open_folder(const char *path);                  // in Explorer
 int plat_count_files(const char *dir, const char *pattern);
+void plat_pen_log_open(void);                 // --pen-log: pen messages and where they land, in %APPDATA%/Vertexa/pen-log.txt
+bool plat_pen_logging(void);
+void plat_pen_log(const char *fmt, ...);
 int plat_list_files(const char *dir, const char *pattern, char (*names)[128], int cap);   // file names (UTF-8), not folders
 int plat_gpu_preference(void);              // Windows per-app GPU choice: 0 default, 1 power saving, 2 high performance
 bool plat_set_gpu_preference(int pref);     // takes effect on the next start   // %APPDATA%/Vertexa/<file>, folder created

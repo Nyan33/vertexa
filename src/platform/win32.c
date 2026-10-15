@@ -43,6 +43,24 @@ void plat_close(void) { PostMessageW(W.hwnd, WM_CLOSE, 0, 0); }
    lines landed away from the cursor. The tablet's units are fitted to the cursor instead: a straight line
    per axis, least squares, with older pairs fading so a changed mapping is learnt again. Until the fit has
    seen enough movement the cursor itself is used. */
+static FILE *PENLOG;
+static int penlog_lines;
+void plat_pen_log_open(void) {
+    char path[1024];
+    if (plat_config_path("pen-log.txt", path, sizeof(path))) PENLOG = plat_fopen(path, "wb");
+}
+bool plat_pen_logging(void) { return PENLOG != NULL; }
+void plat_pen_log(const char *fmt, ...) {
+    if (!PENLOG || penlog_lines > 6000) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(PENLOG, fmt, ap);
+    va_end(ap);
+    fputc('\n', PENLOG);
+    fflush(PENLOG);
+    penlog_lines++;
+}
+
 typedef struct { double w, sh, sp, shh, shp; } PenFit;
 static struct { PenFit ax[2]; HANDLE device; } PF;
 
@@ -79,6 +97,24 @@ static void push_pen(UINT32 id) {
     }
     POINT origin = {0, 0};
     ClientToScreen(W.hwnd, &origin);
+    if (PENLOG) {
+        static bool once;
+        if (!once) {
+            once = true;
+            RECT wr, cr; GetWindowRect(W.hwnd, &wr); GetClientRect(W.hwnd, &cr);
+            RECT dev = {0}, disp = {0};
+            GetPointerDeviceRects(hist[0].pointerInfo.sourceDevice, &dev, &disp);
+            plat_pen_log("window %ld %ld %ld %ld, client %ld x %ld, client origin %ld %ld, scale %.3f, dpi %u, maximized %d",
+                         wr.left, wr.top, wr.right, wr.bottom, cr.right, cr.bottom, origin.x, origin.y, W.scale, GetDpiForWindow(W.hwnd), IsZoomed(W.hwnd));
+            plat_pen_log("pointer device rect %ld %ld %ld %ld, display rect %ld %ld %ld %ld, screen %d x %d",
+                         dev.left, dev.top, dev.right, dev.bottom, disp.left, disp.top, disp.right, disp.bottom,
+                         GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+        }
+        POINTER_INFO *pi = &hist[0].pointerInfo;
+        plat_pen_log("pen n=%u flags %08x pixel %ld %ld raw %ld %ld himetric %ld %ld cursor %ld %ld origin %ld %ld pressure %u",
+                     count, (unsigned)pi->pointerFlags, pi->ptPixelLocation.x, pi->ptPixelLocation.y, pi->ptPixelLocationRaw.x, pi->ptPixelLocationRaw.y,
+                     pi->ptHimetricLocation.x, pi->ptHimetricLocation.y, cur.x, cur.y, origin.x, origin.y, hist[0].pressure);
+    }
     for (int i = (int)count - 1; i >= 0; i--) {   // history is newest first
         POINTER_PEN_INFO *p = &hist[i];
         double fx, fy;
@@ -94,6 +130,7 @@ static void push_pen(UINT32 id) {
             .eraser = (p->penFlags & (PEN_FLAG_ERASER | PEN_FLAG_INVERTED)) != 0,
         };
         if (!contact) continue;
+        if (PENLOG && i == 0) plat_pen_log("  queued %.1f %.1f (logical)", s.x, s.y);
         if (W.qn < COUNT(W.q)) W.q[W.qn++] = s;
     }
 }

@@ -21,6 +21,7 @@ static struct {
     const char *capture; int capture_frame; bool demo, selftest;
     int page; bool save_test;    // --selftest=settings-*
     bool home, splash;           // start screen / splash (a plain launch, or --home / --splash)
+    bool pen_log;                // --pen-log: pen input written to %APPDATA%/Vertexa/pen-log.txt
     double splash_t;
     float bench;                 // --bench=ZOOM: re-render the stage every frame at that zoom and report timings
     double bench_cpu, bench_dt; int bench_n;
@@ -738,6 +739,7 @@ static void init(void) {
     font_init(M.scale);
     gfx_init();
     plat_init(M.scale, !M.capture);   // fixed size when capturing, so screenshots are comparable
+    if (M.pen_log) plat_pen_log_open();
     logo_window_icon();
     cursors_init(M.scale);
     app_init();
@@ -955,6 +957,7 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         if (!strncmp(argv[i], "--capture=", 10)) { M.capture = argv[i] + 10; if (!M.capture_frame) M.capture_frame = 8; }
         else if (!strncmp(argv[i], "--capture-frame=", 16)) M.capture_frame = atoi(argv[i] + 16);
         else if (!strcmp(argv[i], "--home")) M.home = true;
+        else if (!strcmp(argv[i], "--pen-log")) M.pen_log = true;
         else if (!strcmp(argv[i], "--splash")) { M.splash = true; M.home = true; }
         else if (!strncmp(argv[i], "--bench=", 8)) { M.bench = (float)atof(argv[i] + 8); M.demo = true; }
         else if (!strcmp(argv[i], "--demo")) M.demo = true;
