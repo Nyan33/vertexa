@@ -12,7 +12,7 @@
 #include "render/scene.h"
 #include "sokol/sokol_app.h"
 
-enum { M_NONE, M_MOVE, M_MARQUEE, M_LASSO, M_SCALE, M_ROTATE, M_PIVOT, M_NODE };
+enum { M_NONE, M_MOVE, M_MARQUEE, M_LASSO, M_SCALE, M_ROTATE, M_PIVOT, M_NODE, M_SHAPE };
 typedef struct { int item; float a, b; } Section;   // arc-length range of a stroke's centerline
 
 static struct {
@@ -321,6 +321,89 @@ static bool region_crosses(const V2 *R, int n, V2 a, V2 b) {
     for (int j = 0; j < n; j++) if (seg_isect(a, b, R[j], R[(j + 1) % n], NULL, NULL)) return true;
     return false;
 }
+/* ── cutting fills with the selection region ── */
+
+static float cross2(V2 o, V2 a, V2 b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); }
+static float area2(const V2 *p, int n) { float a = 0; for (int i = 0; i < n; i++) { V2 q = p[(i + 1) % n]; a += p[i].x * q.y - q.x * p[i].y; } return a; }
+
+// a contour clipped by a convex polygon (Sutherland-Hodgman); edges may run along the clip edge, which an
+// even-odd fill doesn't mind
+static V2 *clip_convex(const V2 *in, int n, const V2 *C, int nc) {
+    V2 *cur = NULL, *nxt = NULL;
+    for (int i = 0; i < n; i++) arrput(cur, in[i]);
+    float o = area2(C, nc) > 0 ? 1.0f : -1.0f;
+    for (int j = 0; j < nc && arrlen(cur); j++) {
+        V2 a = C[j], b = C[(j + 1) % nc];
+        arrsetlen(nxt, 0);
+        int m = (int)arrlen(cur);
+        for (int i = 0; i < m; i++) {
+            V2 P = cur[i], Q = cur[(i + 1) % m];
+            float dp = o * cross2(a, b, P), dq = o * cross2(a, b, Q);
+            if (dq >= 0) {
+                if (dp < 0) { float t = dp / (dp - dq); arrput(nxt, v2(P.x + (Q.x - P.x) * t, P.y + (Q.y - P.y) * t)); }
+                arrput(nxt, Q);
+            } else if (dp >= 0) { float t = dp / (dp - dq); arrput(nxt, v2(P.x + (Q.x - P.x) * t, P.y + (Q.y - P.y) * t)); }
+        }
+        V2 *t = cur; cur = nxt; nxt = t;
+    }
+    arrfree(nxt);
+    return cur;
+}
+
+// ear clipping; false if the polygon isn't simple enough
+static bool triangulate(const V2 *p, int n, V2 **tris) {
+    int *ix = NULL;
+    for (int i = 0; i < n; i++) arrput(ix, i);
+    float o = area2(p, n) > 0 ? 1.0f : -1.0f;
+    for (int guard = 0; arrlen(ix) > 3 && guard < n * n + 16; guard++) {
+        int m = (int)arrlen(ix);
+        bool cut = false;
+        for (int i = 0; i < m; i++) {
+            V2 a = p[ix[(i + m - 1) % m]], b = p[ix[i]], c = p[ix[(i + 1) % m]];
+            if (o * cross2(a, b, c) <= 1e-9f) continue;
+            bool empty = true;
+            for (int j = 0; j < m && empty; j++) {
+                if (j == i || j == (i + 1) % m || j == (i + m - 1) % m) continue;
+                V2 q = p[ix[j]];
+                empty = !(o * cross2(a, b, q) > 0 && o * cross2(b, c, q) > 0 && o * cross2(c, a, q) > 0);
+            }
+            if (!empty) continue;
+            arrput(*tris, a); arrput(*tris, b); arrput(*tris, c);
+            arrdel(ix, i);
+            cut = true;
+            break;
+        }
+        if (!cut) { arrfree(ix); return false; }
+    }
+    if (arrlen(ix) == 3) { arrput(*tris, p[ix[0]]); arrput(*tris, p[ix[1]]); arrput(*tris, p[ix[2]]); }
+    arrfree(ix);
+    return true;
+}
+
+// the part of a fill inside the region (a box, or a lasso cut into triangles)
+static bool fill_inside(const Item *it, const V2 *R, int nr, Item *out) {
+    V2 *pieces = NULL; int per = 3;
+    if (nr == 4) { for (int i = 0; i < 4; i++) arrput(pieces, R[i]); per = 4; }
+    else if (!triangulate(R, nr, &pieces)) { arrfree(pieces); return false; }
+    *out = item_copy(it);
+    arrsetlen(out->poly, 0); arrsetlen(out->starts, 0);
+    int np = (int)arrlen(it->poly), nc = (int)arrlen(it->starts);
+    for (ptrdiff_t q = 0; q + per <= arrlen(pieces); q += per)
+        for (int c = 0; c < nc; c++) {
+            int a0 = it->starts[c], a1 = c + 1 < nc ? it->starts[c + 1] : np;
+            V2 *cl = clip_convex(it->poly + a0, a1 - a0, pieces + q, per);
+            if (arrlen(cl) >= 3 && fabsf(area2(cl, (int)arrlen(cl))) > 1e-4f) {
+                arrput(out->starts, (int)arrlen(out->poly));
+                for (ptrdiff_t i = 0; i < arrlen(cl); i++) arrput(out->poly, cl[i]);
+            }
+            arrfree(cl);
+        }
+    arrfree(pieces);
+    if (!arrlen(out->starts)) { item_free(out); return false; }
+    item_bounds(out);
+    return true;
+}
+
 static bool sec_overlaps(Section s) {
     for (ptrdiff_t i = 0; i < arrlen(SL.secs); i++) if (SL.secs[i].item == s.item && SL.secs[i].a < s.b && s.a < SL.secs[i].b) return true;
     return false;
@@ -328,6 +411,7 @@ static bool sec_overlaps(Section s) {
 
 // what the region touches; in Sections mode strokes are cut at its edge and the parts inside are picked
 static void region_select(Drawing *dr, const V2 *R, int nr) {
+    bool committed = false;
     float rx0 = R[0].x, ry0 = R[0].y, rx1 = rx0, ry1 = ry0;
     for (int j = 1; j < nr; j++) { rx0 = MIN(rx0, R[j].x); ry0 = MIN(ry0, R[j].y); rx1 = MAX(rx1, R[j].x); ry1 = MAX(ry1, R[j].y); }
     for (int k = 0; k < (int)arrlen(dr->items); k++) {
@@ -378,7 +462,26 @@ static void region_select(Drawing *dr, const V2 *R, int nr) {
                 int a0 = it->starts[c], a1 = c + 1 < nc ? it->starts[c + 1] : np;
                 for (int i = a0; i < a1 && !touched; i++) touched = region_crosses(R, nr, it->poly[i], it->poly[i + 1 < a1 ? i + 1 : a0]);
             }
-            if (touched) sel_add(k);
+            if (!touched) continue;
+            bool all_in = true;   // a fill the region only partly covers is cut: the part inside is picked
+            for (int i = 0; i < np && all_in; i++) all_in = region_has(R, nr, it->poly[i]);
+            Item in;
+            if (all_in || app.sel_box == SELB_TOUCHED || is_sel(k) || !fill_inside(it, R, nr, &in)) { sel_add(k); continue; }
+            if (!committed) { app_commit(); committed = true; }
+            // what is left: the fill with the cut part's contours added (even-odd takes it out)
+            Item *rest = &dr->items[k];
+            for (ptrdiff_t c = 0; c < arrlen(in.starts); c++) {
+                int a0 = in.starts[c], a1 = c + 1 < arrlen(in.starts) ? in.starts[c + 1] : (int)arrlen(in.poly);
+                arrput(rest->starts, (int)arrlen(rest->poly));
+                for (int i = a0; i < a1; i++) arrput(rest->poly, in.poly[i]);
+            }
+            item_bounds(rest);
+            arrins(dr->items, k + 1, in);
+            for (ptrdiff_t i = 0; i < arrlen(SL.idx); i++) if (SL.idx[i] > k) SL.idx[i]++;
+            for (ptrdiff_t i = 0; i < arrlen(SL.secs); i++) if (SL.secs[i].item > k) SL.secs[i].item++;
+            sel_add(k + 1);
+            k++;   // the new piece is done
+            doc_touch(app.doc);
         } else {
             V2 q[4] = {{b[0], b[1]}, {b[2], b[1]}, {b[2], b[3]}, {b[0], b[3]}};
             bool touched = false;
@@ -399,6 +502,229 @@ static int node_at(Drawing *dr, V2 m) {
         if (fabsf(m.x - s.x) <= 5 && fabsf(m.y - s.y) <= 5) return (int)i;
     }
     return -1;
+}
+
+/* ── shaping vectors with the Selection tool, the Animate way ── */
+
+// A drag on a corner moves that point; on an edge it bends the edge between the corners on either side; Ctrl on
+// an edge makes a new corner there. Every fill contour and stroke centreline lying on the dragged geometry
+// follows (a rectangle's outline and its fill stay together).
+enum { SE_NONE, SE_CORNER, SE_BEND };
+static struct {
+    int kind, item;
+    V2 grab;
+    V2 *run; float *rs; float rlen, s0;   // bend: the edge between two corners, its arc lengths, the grab on it
+    Item *orig;                           // every item as it was, edges on the run subdivided
+} SE;
+#define SE_EPS 0.6f   // drawing units: geometry this close to what is dragged is the same geometry
+
+static float seg_dist(V2 p, V2 a, V2 b, float *t) {
+    float dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    float u = l2 > 0 ? clampf(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1) : 0;
+    if (t) *t = u;
+    return hypotf(p.x - a.x - dx * u, p.y - a.y - dy * u);
+}
+static float turn_at(V2 a, V2 b, V2 c) {   // how sharply the outline turns at b (radians)
+    float a1 = atan2f(b.y - a.y, b.x - a.x), a2 = atan2f(c.y - b.y, c.x - b.x), d = a2 - a1;
+    while (d > VX_PI) d -= 2 * VX_PI;
+    while (d < -VX_PI) d += 2 * VX_PI;
+    return fabsf(d);
+}
+// a polyline of an item: a fill contour (closed) or a stroke centreline
+typedef struct { V2 *p; int n; bool closed; } Poly;
+static Poly poly_of(const Item *it, int c, V2 **tmp) {
+    Poly o = {0};
+    if (it->kind == IT_FILL) {
+        int np = (int)arrlen(it->poly), nc = (int)arrlen(it->starts);
+        int a0 = it->starts[c], a1 = c + 1 < nc ? it->starts[c + 1] : np;
+        o.p = it->poly + a0; o.n = a1 - a0; o.closed = true;
+    } else {
+        arrsetlen(*tmp, 0);
+        for (ptrdiff_t i = 0; i < arrlen(it->pts); i++) arrput(*tmp, v2(it->pts[i].x, it->pts[i].y));
+        o.p = *tmp; o.n = (int)arrlen(*tmp); o.closed = it->flags & ITF_CLOSED;
+    }
+    return o;
+}
+static int npolys(const Item *it) { return it->kind == IT_FILL ? (int)arrlen(it->starts) : 1; }
+static bool is_corner(Poly P, int i) {
+    if (!P.closed && (i == 0 || i == P.n - 1)) return true;
+    V2 a = P.p[(i + P.n - 1) % P.n], b = P.p[i], c = P.p[(i + 1) % P.n];
+    return turn_at(a, b, c) > 0.55f;
+}
+
+// what a press at p would shape: SE_CORNER at a corner, SE_BEND on an edge (Ctrl: a new corner)
+static int edit_at(Drawing *dr, V2 p, bool ctrl, int *item, int *poly, int *seg, float *segt) {
+    if (!dr) return SE_NONE;
+    float tolc = 6 * st_unit(), tole = 4 * st_unit();
+    V2 *tmp = NULL;
+    int found = SE_NONE;
+    for (ptrdiff_t k = arrlen(dr->items) - 1; k >= 0 && !found; k--) {
+        Item *it = &dr->items[k];
+        if ((it->kind != IT_FILL && it->kind != IT_STROKE) || it->erase || !target_ok(it)) continue;
+        for (int c = 0; c < npolys(it) && !found; c++) {
+            Poly P = poly_of(it, c, &tmp);
+            if (P.n < 2) continue;
+            float r = 0;
+            if (it->kind == IT_STROKE) for (ptrdiff_t i = 0; i < arrlen(it->pts); i++) r = MAX(r, it->pts[i].r);
+            for (int i = 0; i < P.n && !ctrl; i++)
+                if (is_corner(P, i) && hypotf(p.x - P.p[i].x, p.y - P.p[i].y) <= tolc + r) { found = SE_CORNER; *item = (int)k; *poly = c; *seg = i; *segt = 0; break; }
+            if (found) break;
+            int ns = P.closed ? P.n : P.n - 1;
+            float best = 1e30f; int bs = -1; float bt = 0;
+            for (int i = 0; i < ns; i++) { float t, d = seg_dist(p, P.p[i], P.p[(i + 1) % P.n], &t); if (d < best) { best = d; bs = i; bt = t; } }
+            if (bs >= 0 && best <= tole + r) { found = SE_BEND; *item = (int)k; *poly = c; *seg = bs; *segt = bt; }
+        }
+    }
+    arrfree(tmp);
+    return found;
+}
+
+static float run_param(V2 q, float *dist) {   // arc length of the closest point of the run, and how far
+    float best = 1e30f, bs = 0;
+    for (ptrdiff_t i = 0; i + 1 < arrlen(SE.run); i++) {
+        float t, d = seg_dist(q, SE.run[i], SE.run[i + 1], &t);
+        if (d < best) { best = d; bs = SE.rs[i] + (SE.rs[i + 1] - SE.rs[i]) * t; }
+    }
+    *dist = best;
+    return bs;
+}
+static float bend_w(float s) {   // 1 at the grab with a level top, 0 at the corners
+    if (s <= SE.s0) return SE.s0 > 1e-6f ? sinf(VX_PI / 2 * s / SE.s0) : 1;
+    return SE.rlen - SE.s0 > 1e-6f ? sinf(VX_PI / 2 * (SE.rlen - s) / (SE.rlen - SE.s0)) : 1;
+}
+
+// geometry on the run gets more points, so a straight edge can bend smoothly
+static void subdivide_on_run(Item *it) {
+    float step = 1.5f;
+    if (it->kind == IT_STROKE) {
+        SPt *o = NULL;
+        int n = (int)arrlen(it->pts), ns = (it->flags & ITF_CLOSED) ? n : n - 1;
+        for (int i = 0; i < n; i++) {
+            arrput(o, it->pts[i]);
+            if (i >= ns) continue;
+            SPt a = it->pts[i], b = it->pts[(i + 1) % n];
+            float d1, d2, dm;
+            run_param(v2(a.x, a.y), &d1); run_param(v2(b.x, b.y), &d2); run_param(v2((a.x + b.x) / 2, (a.y + b.y) / 2), &dm);
+            if (d1 > SE_EPS || d2 > SE_EPS || dm > SE_EPS) continue;
+            int k = (int)(hypotf(b.x - a.x, b.y - a.y) / step);
+            for (int j = 1; j < k; j++) { float t = (float)j / k; arrput(o, ((SPt){lerpf(a.x, b.x, t), lerpf(a.y, b.y, t), lerpf(a.r, b.r, t)})); }
+        }
+        arrfree(it->pts); it->pts = o;
+        return;
+    }
+    V2 *o = NULL; int *st = NULL;
+    int np = (int)arrlen(it->poly), nc = (int)arrlen(it->starts);
+    for (int c = 0; c < nc; c++) {
+        int a0 = it->starts[c], a1 = c + 1 < nc ? it->starts[c + 1] : np;
+        arrput(st, (int)arrlen(o));
+        for (int i = a0; i < a1; i++) {
+            V2 a = it->poly[i], b = it->poly[i + 1 < a1 ? i + 1 : a0];
+            arrput(o, a);
+            float d1, d2, dm;
+            run_param(a, &d1); run_param(b, &d2); run_param(v2((a.x + b.x) / 2, (a.y + b.y) / 2), &dm);
+            if (d1 > SE_EPS || d2 > SE_EPS || dm > SE_EPS) continue;
+            int k = (int)(hypotf(b.x - a.x, b.y - a.y) / step);
+            for (int j = 1; j < k; j++) { float t = (float)j / k; arrput(o, v2(lerpf(a.x, b.x, t), lerpf(a.y, b.y, t))); }
+        }
+    }
+    arrfree(it->poly); arrfree(it->starts); it->poly = o; it->starts = st;
+}
+
+// the press: remember everything as it is (nothing changes until the pointer moves)
+static void shape_begin(Drawing *dr, int kind, int item, int poly, int seg, float segt, V2 p, bool ctrl) {
+    for (ptrdiff_t i = 0; i < arrlen(SE.orig); i++) item_free(&SE.orig[i]);
+    arrsetlen(SE.orig, 0); arrsetlen(SE.run, 0); arrsetlen(SE.rs, 0);
+    for (ptrdiff_t i = 0; i < arrlen(dr->items); i++) arrput(SE.orig, item_copy(&dr->items[i]));
+    SE.kind = kind; SE.item = item;
+    V2 *tmp = NULL;
+    Poly P = poly_of(&SE.orig[item], poly, &tmp);
+    if (kind == SE_CORNER) { SE.grab = P.p[seg]; arrfree(tmp); return; }
+    V2 a = P.p[seg], b = P.p[(seg + 1) % P.n], at = v2(lerpf(a.x, b.x, segt), lerpf(a.y, b.y, segt));
+    if (ctrl) {   // a new corner where the edge was grabbed: every polyline through that spot gets the point
+        for (ptrdiff_t k = 0; k < arrlen(SE.orig); k++) {
+            Item *it = &SE.orig[k];
+            if (it->kind == IT_STROKE) {
+                int n = (int)arrlen(it->pts), ns = (it->flags & ITF_CLOSED) ? n : n - 1;
+                for (int i = 0; i < ns; i++) {
+                    SPt q0 = it->pts[i], q1 = it->pts[(i + 1) % n];
+                    float t, d = seg_dist(at, v2(q0.x, q0.y), v2(q1.x, q1.y), &t);
+                    if (d > SE_EPS || t <= 0.001f || t >= 0.999f) continue;
+                    arrins(it->pts, i + 1, ((SPt){at.x, at.y, lerpf(q0.r, q1.r, t)}));
+                    break;
+                }
+            } else if (it->kind == IT_FILL) {
+                int nc = (int)arrlen(it->starts);
+                for (int c = 0; c < nc; c++) {
+                    int a0 = it->starts[c], a1 = c + 1 < nc ? it->starts[c + 1] : (int)arrlen(it->poly);
+                    bool done = false;
+                    for (int i = a0; i < a1 && !done; i++) {
+                        float t, d = seg_dist(at, it->poly[i], it->poly[i + 1 < a1 ? i + 1 : a0], &t);
+                        if (d > SE_EPS || t <= 0.001f || t >= 0.999f) continue;
+                        arrins(it->poly, i + 1, at);
+                        for (int q = c + 1; q < nc; q++) it->starts[q]++;
+                        done = true;
+                    }
+                }
+            }
+        }
+        SE.kind = SE_CORNER; SE.grab = at;
+        arrfree(tmp);
+        return;
+    }
+    // the edge to bend: from the corner before the grabbed segment to the one after it
+    int n = P.n, i0 = seg, i1 = (seg + 1) % n;
+    int lim = n;
+    if (P.closed) {
+        bool any = false;
+        for (int i = 0; i < n; i++) any |= is_corner(P, i);
+        if (!any) { i0 = (seg - n / 4 + n) % n; i1 = (seg + 1 + n / 4) % n; }   // a smooth loop: a quarter either way
+        else {
+            while (!is_corner(P, i0) && lim-- > 0) i0 = (i0 + n - 1) % n;
+            lim = n;
+            while (!is_corner(P, i1) && lim-- > 0) i1 = (i1 + 1) % n;
+        }
+        arrput(SE.run, P.p[i0]);   // round to the next corner (all the way round if it is the same one)
+        for (int i = (i0 + 1) % n, g = 0; g <= n; i = (i + 1) % n, g++) { arrput(SE.run, P.p[i]); if (i == i1) break; }
+    } else {
+        while (i0 > 0 && !is_corner(P, i0)) i0--;
+        while (i1 < n - 1 && !is_corner(P, i1)) i1++;
+        for (int i = i0; i <= i1; i++) arrput(SE.run, P.p[i]);
+    }
+    arrfree(tmp);
+    float acc = 0;
+    for (ptrdiff_t i = 0; i < arrlen(SE.run); i++) { if (i) acc += hypotf(SE.run[i].x - SE.run[i - 1].x, SE.run[i].y - SE.run[i - 1].y); arrput(SE.rs, acc); }
+    SE.rlen = acc;
+    float d;
+    SE.s0 = run_param(at, &d);
+    SE.grab = at;
+    for (ptrdiff_t k = 0; k < arrlen(SE.orig); k++) if (SE.orig[k].kind == IT_FILL || SE.orig[k].kind == IT_STROKE) subdivide_on_run(&SE.orig[k]);
+}
+
+// the drag: everything rebuilt from the originals, moved by delta (corner) or delta times the bend weight
+static void shape_drag(Drawing *dr, V2 delta) {
+    for (ptrdiff_t k = 0; k < arrlen(dr->items) && k < arrlen(SE.orig); k++) {
+        Item *src = &SE.orig[k];
+        if (src->kind != IT_FILL && src->kind != IT_STROKE) continue;
+        Item *dst = &dr->items[k];
+        item_free(dst);
+        *dst = item_copy(src);
+        if (SE.kind == SE_CORNER) {
+            for (ptrdiff_t i = 0; i < arrlen(dst->pts); i++) if (hypotf(dst->pts[i].x - SE.grab.x, dst->pts[i].y - SE.grab.y) <= SE_EPS) { dst->pts[i].x += delta.x; dst->pts[i].y += delta.y; }
+            for (ptrdiff_t i = 0; i < arrlen(dst->poly); i++) if (hypotf(dst->poly[i].x - SE.grab.x, dst->poly[i].y - SE.grab.y) <= SE_EPS) { dst->poly[i].x += delta.x; dst->poly[i].y += delta.y; }
+        } else {
+            float d;
+            for (ptrdiff_t i = 0; i < arrlen(dst->pts); i++) {
+                float s = run_param(v2(dst->pts[i].x, dst->pts[i].y), &d);
+                if (d <= SE_EPS) { float w = bend_w(s); dst->pts[i].x += delta.x * w; dst->pts[i].y += delta.y * w; }
+            }
+            for (ptrdiff_t i = 0; i < arrlen(dst->poly); i++) {
+                float s = run_param(dst->poly[i], &d);
+                if (d <= SE_EPS) { float w = bend_w(s); dst->poly[i].x += delta.x * w; dst->poly[i].y += delta.y * w; }
+            }
+        }
+        item_bounds(dst);
+    }
+    doc_touch(app.doc);
 }
 
 /* ── the tool ── */
@@ -440,6 +766,18 @@ void select_tool(UiResp *re, char tool) {
             if (h >= 0) { SL.mode = rot ? M_ROTATE : M_SCALE; SL.handle = h; SL.opivot = current_pivot(dr); return; }
         }
         if (tool == 'L') { SL.mode = M_LASSO; arrsetlen(SL.lasso, 0); arrput(SL.lasso, p); if (!shift) clear_items(); return; }
+        if (tool == 'V' && !shift && !re->dbl && !st_cannot_edit()) {
+            Drawing *ad = st_drawing(false);
+            int it, pl, sg; float st;
+            int kind = ad && !point_selected(ad, p) ? edit_at(ad, p, ui.in.mods & MOD_CTRL, &it, &pl, &sg, &st) : SE_NONE;
+            if (kind) {
+                SL.drawing = drawing_index(ad);
+                clear_items();
+                shape_begin(ad, kind, it, pl, sg, st, p, ui.in.mods & MOD_CTRL);
+                SL.mode = M_SHAPE;
+                return;
+            }
+        }
         int k = hit_any_layer(p);
         dr = sel_drawing();
         if (re->dbl && k >= 0 && dr->items[k].kind == IT_INSTANCE) { enter_instance(dr, k); SL.mode = M_NONE; return; }
@@ -507,6 +845,13 @@ void select_tool(UiResp *re, char tool) {
             apply_transform(mat_mul(mat_tr(c.x, c.y), mat_mul(mat_rot(da), mat_tr(-c.x, -c.y))));
             break;
         }
+        case M_SHAPE: {
+            if (!SL.moved) break;
+            if (!SL.committed) { app_commit(); SL.committed = true; }
+            Drawing *d2 = sel_drawing();
+            if (d2) shape_drag(d2, v2(p.x - SL.start.x, p.y - SL.start.y));
+            break;
+        }
         case M_NODE: {
             if (!SL.moved || SL.node_item < 0) break;
             if (!SL.committed) { app_commit(); SL.committed = true; }
@@ -528,6 +873,13 @@ void select_tool(UiResp *re, char tool) {
             region_select(dr, R, 4);
         }
         if (SL.mode == M_LASSO && dr && arrlen(SL.lasso) > 2) region_select(dr, SL.lasso, (int)arrlen(SL.lasso));
+        if (SL.mode == M_SHAPE && !SL.moved && dr) {   // only a click: it selects, as before
+            int k = hit_item(dr, p);
+            if (k >= 0) {
+                Section s;
+                if (section_at(dr, k, p, &s)) arrput(SL.secs, s); else sel_add(k);
+            }
+        }
         if (SL.mode == M_MOVE && !SL.moved && !shift && dr) {   // a click inside a multiple selection picks just that
             int k = hit_item(dr, p);
             if (k >= 0) {
@@ -551,6 +903,13 @@ void select_tool(UiResp *re, char tool) {
             ui_cursor(rot ? CUR_ROTATE : cur[h]);
         } else if (SL.node >= 0) ui_cursor(SAPP_MOUSECURSOR_POINTING_HAND);
         else if (SL.hover >= 0 && point_selected(dr, p)) ui_cursor(SAPP_MOUSECURSOR_RESIZE_ALL);
+        else if (tool == 'V') {
+            int it, pl, sg; float st;
+            Drawing *ad = st_drawing(false);
+            int kind = ad ? edit_at(ad, p, ui.in.mods & MOD_CTRL, &it, &pl, &sg, &st) : SE_NONE;
+            if (kind == SE_CORNER) ui_cursor(SAPP_MOUSECURSOR_RESIZE_ALL);
+            else if (kind == SE_BEND) ui_cursor(SAPP_MOUSECURSOR_POINTING_HAND);
+        }
     }
 }
 

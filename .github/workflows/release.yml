@@ -2,7 +2,7 @@ name: Build
 
 # Every push to main builds Vertexa for Windows and publishes it as the next version: Alpha 1, Alpha 2, ...
 # (tag alpha-N, N one past the highest existing one, so no tag is ever moved or overwritten). The release
-# notes are the commit message; Alpha 1 carries CHANGELOG.md (what changed since the old Qt Vertexa) and is
+# notes are the messages of the commits since the previous version; Alpha 1 carries CHANGELOG.md (what changed since the old Qt Vertexa) and is
 # updated whenever the changelog changes. Pull requests only build.
 on:
   push:
@@ -65,7 +65,10 @@ jobs:
           if [ -n "$(git tag --points-at HEAD -l 'alpha-*')" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi   # already released
           last=$(git tag -l 'alpha-*' | sed 's/alpha-//' | sort -n | tail -n1)
           n=$(( ${last:-0} + 1 ))
-          if [ "$n" = 1 ]; then cp CHANGELOG.md notes.md; else git log -1 --pretty=%B > notes.md; fi
+          if [ "$n" = 1 ]; then cp CHANGELOG.md notes.md
+          else   # every commit since the previous version, each with its message
+            git log --no-merges --reverse --pretty='### %s%n%n%b' "alpha-${last}..HEAD" | grep -v '^Co-Authored-By' > notes.md
+          fi
           echo "tag=alpha-$n" >> "$GITHUB_OUTPUT"
           echo "name=Vertexa Alpha $n" >> "$GITHUB_OUTPUT"
 

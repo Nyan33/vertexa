@@ -147,6 +147,35 @@ static void drag_screen(int f, int start, int len, V2 a, V2 b) {
     float t = (float)(f - start) / len;
     in_move(v2(lerpf(a.x, b.x, t), lerpf(a.y, b.y, t)));
 }
+// --selftest=shape[-edit]: a rectangle; a box over its right part picks only that part, which is dragged off.
+// shape-edit: the right edge bent outward, a Ctrl-drag on the top edge makes a spike, a brush stroke bent
+static void selftest_shape(int f) {
+    if (M.key_release) { ui.in.key_down[M.key_release] = false; ui.in.mods = 0; M.key_release = 0; }
+    if (f == 2) { app.stroke = hex(0xff3b30); app.fill = hex(0x8b7bff); app.shape_width = 6; }   // outline and fill told apart
+    if (f == 3) in_key(SAPP_KEYCODE_R, 0);
+    drag_line(f, 5, 8, v2(400, 200), v2(800, 500));
+    if (M.page) {
+        if (f == 15) in_key(SAPP_KEYCODE_B, 0);
+        drag_line(f, 17, 8, v2(300, 620), v2(1000, 620));
+    }
+    if (f == 28) in_key(SAPP_KEYCODE_V, 0);
+    if (!M.page) {
+        drag_screen(f, 30, 8, stage_to_screen(v2(650, 150)), stage_to_screen(v2(900, 560)));
+        float b[4]; V2 pv;
+        if (f == 41 && select_info(b, &pv)) vx_log("selftest: box: picked %d, items %d, picked bounds %.0f %.0f %.0f %.0f", select_count(), (int)arrlen(st_drawing(false)->items), b[0], b[1], b[2], b[3]);
+        drag_screen(f, 43, 8, stage_to_screen(v2(720, 350)), stage_to_screen(v2(820, 350)));
+        if (f == 55) vx_log("selftest: after the drag: items %d", (int)arrlen(st_drawing(false)->items));
+        return;
+    }
+    drag_screen(f, 30, 8, stage_to_screen(v2(800, 350)), stage_to_screen(v2(920, 350)));   // bend the right edge
+    if (f == 41) { Drawing *dr = st_drawing(false); int pts = 0; for (ptrdiff_t i = 0; i < arrlen(dr->items); i++) pts += (int)arrlen(dr->items[i].poly) + (int)arrlen(dr->items[i].pts); vx_log("selftest: bend: items %d, points %d", (int)arrlen(dr->items), pts); }
+    if (f == 43) ui.in.mods = MOD_CTRL;
+    drag_screen(f, 43, 8, stage_to_screen(v2(560, 200)), stage_to_screen(v2(600, 90)));      // a spike up from the top edge
+    if (f == 52) ui.in.mods = 0;
+    drag_screen(f, 55, 8, stage_to_screen(v2(650, 620)), stage_to_screen(v2(650, 690)));     // bend the brush stroke
+    if (f == 66) in_move(stage_to_screen(v2(200, 100)));
+}
+
 static void selftest_select(int f) {
     static u32 v0; static float b[4]; static V2 pv;
     if (M.key_release) { ui.in.key_down[M.key_release] = false; ui.in.mods = 0; M.key_release = 0; }
@@ -614,6 +643,7 @@ static void frame(void) {
     else if (M.selftest && M.variant == 15) selftest_tabs(M.frames);
     else if (M.selftest && M.variant == 16) selftest_blend(M.frames);
     else if (M.selftest && M.variant == 17) selftest_image(M.frames);
+    else if (M.selftest && M.variant == 18) selftest_shape(M.frames);
     else if (M.selftest && M.variant == 13) {   // --selftest=curve: a point added to the pressure curve, then removed
         V2 add = {1520, 850};
         if (M.frames == 4) vx_log("selftest: curve points %d", app.curve.n);
@@ -828,6 +858,8 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         else if (!strcmp(argv[i], "--selftest=export-symbols")) { M.selftest = true; M.variant = 14; M.capture_frame = 94; }
         else if (!strcmp(argv[i], "--selftest=library")) { M.selftest = true; M.variant = 14; M.page = 2; M.capture_frame = 82; }
         else if (!strcmp(argv[i], "--selftest=export-window")) { M.selftest = true; M.variant = 14; M.page = 1; M.capture_frame = 80; }
+        else if (!strcmp(argv[i], "--selftest=shape")) { M.selftest = true; M.variant = 18; M.capture_frame = 58; }
+        else if (!strcmp(argv[i], "--selftest=shape-edit")) { M.selftest = true; M.variant = 18; M.page = 1; M.capture_frame = 70; }
         else if (!strcmp(argv[i], "--selftest=image")) { M.selftest = true; M.variant = 17; M.capture_frame = 12; }
         else if (!strcmp(argv[i], "--selftest=blend")) { M.selftest = true; M.variant = 16; M.capture_frame = 18; }
         else if (!strcmp(argv[i], "--selftest=tabs")) { M.selftest = true; M.variant = 15; M.capture_frame = 21; }
