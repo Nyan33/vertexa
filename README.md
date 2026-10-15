@@ -7,8 +7,8 @@ What changed since the old Qt version: [CHANGELOG.md](CHANGELOG.md).
 ## Download
 
 Every push to `main` is built for Windows x64 and published on the
-[Releases](https://github.com/Nyan33/vertexa/releases) page under a new tag `bN` (N = the number of commits),
-named after the commit, the way llama.cpp does it. Unzip and run `vertexa.exe`; the build is not code-signed,
+[Releases](https://github.com/Nyan33/vertexa/releases) page as the next version (Alpha 1, Alpha 2, ...).
+Unzip and run `vertexa.exe`; the build is not code-signed,
 so SmartScreen may ask (*More info, Run anyway*).
 
 ## Build (Windows)
