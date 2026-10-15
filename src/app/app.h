@@ -15,6 +15,10 @@ typedef struct {
     float fit;                    // 0..100: smoothing of the curve on release
     char texture[48];             // paper grain (app/textures.c), "" = none
     float tex_density, tex_scale; // %
+    char tip_image[48];           // a tip image (app/textures.c, tips/) instead of the vector tip
+    u8 img_mode, img_flags;       // IMG_* (0: the vector tip), IMGF_*
+    float img_spacing;            // stamps: % of the tip size between them
+    float img_w0, img_w1;         // width across the image with light / full pressure, %
     bool user;                    // the user's (made, duplicated or imported): editable; built-ins are not
 } BrushPreset;
 
@@ -25,6 +29,12 @@ bool texture_is_user(int i);
 int texture_find(const char *name);         // index, -1 if there is none by that name
 int texture_bitmap(const char *name);       // its bitmap in the bank (made on first use), 0 if none
 bool texture_import(const char *path, char *name, int cap);
+int tipimg_count(void);
+const char *tipimg_name(int i);
+int tipimg_find(const char *name);
+int tipimg_bitmap(const char *name);
+bool tipimg_import(const char *path, char *name, int cap);
+bool tipimg_add(const char *base, const u8 *png, size_t size, char *name, int cap);   // a PNG kept as base.png
 
 enum { TRIM_TO_INTERSECTION, TRIM_WHOLE };
 enum { SELM_STROKES, SELM_SECTIONS };            // what a click picks
@@ -92,6 +102,7 @@ typedef struct {
     u8 tip; float tip_angle, tip_aspect;
     float taper_s, taper_e, brush_opacity, brush_fit;
     char texture[48]; float tex_density, tex_scale;
+    char tip_image[48]; u8 img_mode, img_flags; float img_spacing, img_w0, img_w1;
     Curve curve;
     float eraser_size; int eraser_mode;
     float pencil_size; int pencil_mode;
@@ -206,7 +217,8 @@ V2 st_local(V2 screen);
 V2 st_screen(V2 local);
 float st_unit(void);                       // editing units per screen pixel
 Drawing *st_drawing(bool create);          // active layer's drawing at the current frame
-const char *st_cannot_edit(void);          // why the active layer can't be edited (NULL if it can)
+const char *st_cannot_edit(void);
+void st_test_stroke(const V2 *pts, const float *pressure, int n);   // self-tests: a brush stroke with pen pressures          // why the active layer can't be edited (NULL if it can)
 void st_invalidate(void);                  // force a stage re-render
 
 // tools

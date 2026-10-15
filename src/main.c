@@ -187,6 +187,42 @@ static void selftest_brushes(int f) {
     } else if (M.page == 1) {
         if (f == 3) brush_new();
         if (f == 6) vx_log("selftest: new brush \"%s\" (%d brushes), editing %d", app.presets[app.preset].name, (int)arrlen(app.presets), brush_editing());
+    } else if (M.page == 5) {   // --selftest=csp-tip: a Clip Studio feather brush (image tip), a short and a long stroke
+        if (f == 3) {
+            bool ok = app_open_path("D:/Programming/Vertexa/research/sut_feather/short 2 detail.sut");
+            BrushPreset *p = &app.presets[app.preset];
+            vx_log("selftest: import %s: \"%s\" size %.0f, tip image \"%s\" mode %d spacing %.0f angle %.0f; %s", ok ? "ok" : "FAILED",
+                   p->name, p->size, p->tip_image, p->img_mode, p->img_spacing, p->angle, app.toast);
+            app.fill = hex(0x22e6c8);
+            in_key(SAPP_KEYCODE_B, 0);
+        }
+        if (f == 6) {   // short pen strokes, light to heavy, as on the brush's page; then a long one
+            for (int k = 0; k < 4; k++) {
+                V2 pts[6]; float pr[6];
+                for (int i = 0; i < 6; i++) { pts[i] = v2(160 + k * 250 + i * 8, 470 + i * 2); pr[i] = 0.05f + k * 0.3f; }
+                st_test_stroke(pts, pr, 6);
+            }
+            V2 pts[40]; float pr[40];
+            for (int i = 0; i < 40; i++) { float t = i / 39.0f; pts[i] = v2(150 + t * 980, 640 - sinf(t * 3.1f) * 60); pr[i] = 0.2f + 0.6f * sinf(t * 3.1f); }
+            st_test_stroke(pts, pr, 40);
+        }
+        if (f == 20) {   // the same image laid along a line
+            app.img_mode = IMG_ALONG;
+            V2 pts[30]; float pr[30];
+            for (int i = 0; i < 30; i++) { float t = i / 29.0f; pts[i] = v2(300 + t * 700, 130 + sinf(t * 3.1f) * 50); pr[i] = 0.1f; }
+            st_test_stroke(pts, pr, 30);
+        }
+        if (f == 26) {
+            static const char *vxa = "D:/Programming/Vertexa/research/tmp/image_stroke.vxa";
+            bool sv = doc_save(app.doc, vxa), ok = sv && app_open_path(vxa);
+            Drawing *dr = st_drawing(false);
+            int n = 0;
+            for (ptrdiff_t q = 0; dr && q < arrlen(dr->items); q++) n += dr->items[q].img_mode && bitmap_get(dr->items[q].img) != NULL;
+            vx_log("selftest: saved and reopened %s, image strokes %d", ok ? "ok" : "FAILED", n);
+        }
+        if (f == 32) { Drawing *dr = st_drawing(false); vx_log("selftest: strokes %d, first image %d mode %d", dr ? (int)arrlen(dr->items) : 0, dr && arrlen(dr->items) ? dr->items[0].img : 0, dr && arrlen(dr->items) ? dr->items[0].img_mode : 0); }
+        if (f == 33) brush_new();
+        if (f == 35) in_move(v2(700, 700));
     } else if (M.page == 4) {   // --selftest=texture: Pencil, Chalk and Wash strokes, saved and read back
         static const char *names[] = {"Pencil", "Chalk", "Wash"};
         static const char *vxa = "D:/Programming/Vertexa/research/tmp/texture_test.vxa";
@@ -914,6 +950,7 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         else if (!strcmp(argv[i], "--selftest=export-window")) { M.selftest = true; M.variant = 14; M.page = 1; M.capture_frame = 80; }
         else if (!strcmp(argv[i], "--selftest=brushes")) { M.selftest = true; M.variant = 19; M.capture_frame = 16; }
         else if (!strcmp(argv[i], "--selftest=brush-edit")) { M.selftest = true; M.variant = 19; M.page = 1; M.capture_frame = 10; }
+        else if (!strcmp(argv[i], "--selftest=csp-tip")) { M.selftest = true; M.variant = 19; M.page = 5; M.capture_frame = 38; }
         else if (!strcmp(argv[i], "--selftest=texture")) { M.selftest = true; M.variant = 19; M.page = 4; M.capture_frame = 50; }
         else if (!strcmp(argv[i], "--selftest=recolor")) { M.selftest = true; M.variant = 19; M.page = 2; M.capture_frame = 30; }
         else if (!strcmp(argv[i], "--selftest=shape")) { M.selftest = true; M.variant = 18; M.capture_frame = 58; }

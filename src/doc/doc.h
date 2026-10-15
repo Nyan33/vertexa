@@ -61,9 +61,16 @@ typedef struct {
     Filter *filters;         // instance filters (stb_ds)
     u8 grad, spread;         // fill: gradient kind, spread
     GStop *stops;            // fill: gradient stops (stb_ds)
+    int img;                 // stroke drawn with an image instead of the vector tip (a bitmap id, 0: none)
+    float img_gap;           // IMG_STAMPS: distance between the stamps, drawing units
+    float img_r0, img_r1, img_w0, img_w1;   // width across the image: w0 where the radius is r0 (no pressure),
+                                            // w1 where it is r1 (full pressure), in between by the radius
+    u8 img_mode, img_flags;  // IMG_*, IMGF_*
     float bx0, by0, bx1, by1;   // bounds in drawing space (strokes and fills)
 } Item;
 
+enum { IMG_NONE, IMG_STAMPS, IMG_ALONG };   // the image stamped along the stroke / stretched over all of it
+enum { IMGF_FLIP_X = 1, IMGF_FLIP_Y = 2, IMGF_FIXED = 4 };   // FIXED: stamps don't turn with the stroke
 typedef Item Stroke;   // brush code still speaks about strokes
 
 typedef struct { Item *items; bool used; } Drawing;

@@ -5,7 +5,7 @@
 #include <windows.h>
 
 #define VXA_MAGIC 0x32415856u   // "VXA2"
-#define VXA_VERSION 5u   // 5: eases on keys, the background colour   // 2: camera keys, audio layers and the embedded sounds; 3: export settings;
+#define VXA_VERSION 6u   // 6: image strokes; 5: eases on keys, the background colour   // 2: camera keys, audio layers and the embedded sounds; 3: export settings;
                          // 4: bitmaps, item blend modes, see-through layers, Animate's blend mode order
 
 typedef struct { u8 *p; size_t n; } Buf;
@@ -77,6 +77,10 @@ bool doc_save(Doc *d, const char *path) {
             }
             put32(&b, (u32)arrlen(it->stops));
             for (ptrdiff_t q = 0; q < arrlen(it->stops); q++) { putf(&b, it->stops[q].pos); put32(&b, it->stops[q].c); }
+            put32(&b, (u32)it->img); putf(&b, it->img_gap);   // 6
+            putf(&b, it->img_r0); putf(&b, it->img_r1); putf(&b, it->img_w0); putf(&b, it->img_w1);
+            u8 im[4] = {it->img_mode, it->img_flags, 0, 0};
+            put(&b, im, 4);
         }
     }
     // the sounds audio layers use, embedded as their original files (WAV / MP3 / OGG)
@@ -110,10 +114,14 @@ bool doc_save(Doc *d, const char *path) {
     for (ptrdiff_t i = 0; i < arrlen(d->drawings); i++)
         for (ptrdiff_t k = 0; d->drawings[i].used && k < arrlen(d->drawings[i].items); k++) {
             Item *it = &d->drawings[i].items[k];
-            if ((it->kind != IT_BITMAP && it->kind != IT_FILL && !(it->kind == IT_STROKE && it->texture)) || !it->sym || !bitmap_get(it->sym)) continue;
-            bool seen = false;
-            for (ptrdiff_t q = 0; q < arrlen(bms); q++) seen |= bms[q] == it->sym;
-            if (!seen) arrput(bms, it->sym);
+            int use[2] = {(it->kind == IT_BITMAP || it->kind == IT_FILL || (it->kind == IT_STROKE && it->texture)) ? it->sym : 0,
+                          it->kind == IT_STROKE ? it->img : 0};
+            for (int u = 0; u < 2; u++) {
+                if (!use[u] || !bitmap_get(use[u])) continue;
+                bool seen = false;
+                for (ptrdiff_t q = 0; q < arrlen(bms); q++) seen |= bms[q] == use[u];
+                if (!seen) arrput(bms, use[u]);
+            }
         }
     put32(&b, (u32)arrlen(bms));
     for (ptrdiff_t i = 0; i < arrlen(bms); i++) {
@@ -244,6 +252,13 @@ Doc *doc_load(const char *path, char *err, int errcap) {
                 for (u32 q = 0; q < ng && !r.bad; q++) { GStop g; g.pos = getf(&r); g.c = get32(&r); arrput(it.stops, g); }
                 if (!arrlen(it.stops)) it.grad = GR_NONE;
             }
+            if (file_ver >= 6) {
+                it.img = (int)get32(&r); it.img_gap = getf(&r);
+                it.img_r0 = getf(&r); it.img_r1 = getf(&r); it.img_w0 = getf(&r); it.img_w1 = getf(&r);
+                u8 im[4]; get(&r, im, 4);
+                it.img_mode = im[0] <= IMG_ALONG ? im[0] : IMG_NONE; it.img_flags = im[1];
+                if (!it.img_mode) it.img = 0;
+            }
             item_bounds(&it);
             arrput(dr.items, it);
         }
@@ -313,6 +328,12 @@ Doc *doc_load(const char *path, char *err, int errcap) {
         for (ptrdiff_t i = 0; i < arrlen(d->drawings); i++)
             for (ptrdiff_t k = 0; k < arrlen(d->drawings[i].items); k++) {
                 Item *it = &d->drawings[i].items[k];
+                if (it->kind == IT_STROKE && it->img) {
+                    int to = 0;
+                    for (ptrdiff_t q = 0; q < arrlen(map); q++) if (map[q].from == it->img) to = map[q].to;
+                    it->img = to;
+                    if (!to) it->img_mode = IMG_NONE;
+                }
                 if (it->kind != IT_BITMAP && !(it->kind == IT_FILL && it->sym) && !(it->kind == IT_STROKE && it->texture && it->sym)) continue;
                 int to = 0;
                 for (ptrdiff_t q = 0; q < arrlen(map); q++) if (map[q].from == it->sym) to = map[q].to;

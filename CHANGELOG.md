@@ -21,7 +21,9 @@ interface drawn entirely on the GPU. Documents use a new format (`.vxa`). Window
 - Brush textures: paper grain shows through the ink. Built-in Paper, Pencil, Canvas, Watercolor and
   Chalk, or any image of your own; density and scale. New Pencil, Chalk and Wash brushes. Documents keep
   the textures their strokes use.
-- Clip Studio Paint brush import (`.sut`).
+- Image tips: a picture stamped along the line (turning with it, spacing, angle) or stretched over the
+  whole line, with its width across set by pen pressure; any image can be added.
+- Clip Studio Paint brush import (`.sut`), image tips included (taken from the brush's preview picture).
 - Trim Edge (`C`): cuts a stroke back to the nearest intersections with a click or a drag.
 - Umoupen-style selection: the vector itself is picked, whole or just the piece between intersections;
   the box and the lasso cut strokes.

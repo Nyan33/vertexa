@@ -156,6 +156,9 @@ static BrushOpts opts_for(char tool) {
         o.fit = app.brush_fit;
         o.tex = app.texture[0] ? texture_bitmap(app.texture) : 0;
         o.tex_density = app.tex_density / 100; o.tex_scale = app.tex_scale / 100;
+        o.img = app.img_mode && app.tip_image[0] ? tipimg_bitmap(app.tip_image) : 0;
+        o.img_mode = o.img ? app.img_mode : IMG_NONE; o.img_flags = app.img_flags; o.img_spacing = app.img_spacing / 100;
+        o.img_w0 = app.img_w0 / 100; o.img_w1 = app.img_w1 / 100;
         o.color = col_alpha(app.fill, app.alpha * app.brush_opacity / 100);
     }
     return o;
@@ -180,6 +183,18 @@ static void finish_stroke(void) {
     if (!dr) { item_free(&st); return; }
     if (S.draw_tool == 'B' && app.brush_mode == 2) arrins(dr->items, 0, st);
     else arrput(dr->items, st);
+    doc_touch(app.doc);
+}
+
+// self-tests: a brush stroke through drawing-space points with a pen pressure each, as if drawn
+void st_test_stroke(const V2 *pts, const float *pressure, int n) {
+    Builder b;
+    bb_begin(&b, opts_for('B'));
+    for (int i = 0; i < n; i++) bb_add(&b, pts[i].x, pts[i].y, pressure[i], 0);
+    Stroke st = bb_finish(&b);
+    Drawing *dr = st_drawing(true);
+    if (!dr || !arrlen(st.pts)) { item_free(&st); return; }
+    arrput(dr->items, st);
     doc_touch(app.doc);
 }
 

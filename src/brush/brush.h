@@ -24,6 +24,10 @@ typedef struct {
     int tex;             // texture (a bitmap id, 0: none): its grain shows through the ink
     float tex_density;   // 0..1
     float tex_scale;     // document units per texture pixel
+    int img;             // a tip image (bitmap id) instead of the vector tip, 0: none
+    u8 img_mode, img_flags;
+    float img_spacing;   // IMG_STAMPS: distance between stamps, in tip diameters
+    float img_w0, img_w1;   // width across the image with no / full pressure (1 = the image's own proportions)
     Color color;
     u8 erase;
     float unit;          // document units per screen pixel
@@ -56,5 +60,6 @@ void brush_union_end(DrawList *dl, Color color);    // ...and one cover shades t
 // where textured strokes get their texture: the GPU view of a bitmap and its size (set by the renderer)
 typedef u32 (*BrushTexFn)(int bitmap, int *w, int *h);
 void brush_texture_source(BrushTexFn fn);
-void stroke_set_texture(Stroke *s, int bitmap, float density, float scale);   // 0: none   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
+void stroke_set_texture(Stroke *s, int bitmap, float density, float scale);   // 0: none
+void stroke_set_image(Stroke *s, const BrushOpts *o);   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
 SPt *brush_resample(const Stroke *st, float step);   // dense centerline (scratch array, valid until the next call)

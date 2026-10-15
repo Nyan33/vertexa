@@ -33,10 +33,12 @@ static void preset_line(FILE *f, const BrushPreset *p) {
     int taper = (p->taper_s > 0 ? TAPER_START : 0) | (p->taper_e > 0 ? TAPER_END : 0);
     fprintf(f, "%s\t%g %g %d %g %g %d |", p->name, p->size, p->smoothing, p->tip, p->angle, p->aspect, taper);
     for (int k = 0; k < p->curve.n; k++) fprintf(f, " %g,%g", p->curve.x[k], p->curve.y[k]);
-    fprintf(f, "\topacity=%g fit=%g taper_start=%g taper_end=%g density=%g scale=%g\t%s\n",
-            p->opacity, p->fit, p->taper_s, p->taper_e, p->tex_density, p->tex_scale, p->texture);
+    fprintf(f, "\topacity=%g fit=%g taper_start=%g taper_end=%g density=%g scale=%g image=%d spacing=%g flags=%d width_light=%g width_heavy=%g\t%s\t%s\n",
+            p->opacity, p->fit, p->taper_s, p->taper_e, p->tex_density, p->tex_scale, p->img_mode, p->img_spacing, p->img_flags,
+            p->img_w0, p->img_w1,
+            p->texture, p->tip_image);
 }
-#define PRESET_HEADER "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y<TAB>key=value ...<TAB>texture\n"
+#define PRESET_HEADER "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y<TAB>key=value ...<TAB>texture<TAB>tip image\n"
 
 void app_presets_save(void) {
     char path[1024];
@@ -58,8 +60,8 @@ static bool parse_preset(char *line, BrushPreset *p) {
     *tab = 0;
     memset(p, 0, sizeof(*p));
     p->user = true;
-    char *ext = strchr(tab + 1, '\t'), *tex = NULL;
-    if (ext) { *ext++ = 0; tex = strchr(ext, '\t'); if (tex) *tex++ = 0; }
+    char *ext = strchr(tab + 1, '\t'), *tex = NULL, *img = NULL;
+    if (ext) { *ext++ = 0; tex = strchr(ext, '\t'); if (tex) { *tex++ = 0; img = strchr(tex, '\t'); if (img) *img++ = 0; } }
     int tip = 0, taper = 0;
     char *bar = strchr(tab + 1, '|');
     if (bar) {
@@ -79,11 +81,11 @@ static bool parse_preset(char *line, BrushPreset *p) {
         p->curve = (Curve){3, {0, clampf(c[1], 0.05f, 0.95f), 1}, {clampf(c[0], 0, 1), clampf(c[2], 0, 1), clampf(c[3], 0, 1)}};
     }
     snprintf(p->name, sizeof(p->name), "%s", line);
-    p->size = clampf(p->size, 1, 100); p->smoothing = clampf(p->smoothing, 0, 100);
+    p->size = clampf(p->size, 1, 400); p->smoothing = clampf(p->smoothing, 0, 100);
     p->tip = (u8)CLAMP(tip, 0, TIP_SQUARE);
     p->aspect = clampf(p->aspect, 0.05f, 1);
     p->taper_s = taper & TAPER_START ? 50 : 0; p->taper_e = taper & TAPER_END ? 50 : 0;
-    p->opacity = 100; p->fit = p->smoothing; p->tex_density = 60; p->tex_scale = 100;
+    p->opacity = 100; p->fit = p->smoothing; p->tex_density = 60; p->tex_scale = 100; p->img_spacing = 80; p->img_w0 = p->img_w1 = 100;
     for (char *t = ext ? strtok(ext, " \r\n") : NULL; t; t = strtok(NULL, " \r\n")) {
         char key[32]; float v;
         if (sscanf(t, "%31[^=]=%f", key, &v) != 2) continue;
@@ -93,8 +95,15 @@ static bool parse_preset(char *line, BrushPreset *p) {
         else if (!strcmp(key, "taper_end")) p->taper_e = clampf(v, 0, 100);
         else if (!strcmp(key, "density")) p->tex_density = clampf(v, 0, 100);
         else if (!strcmp(key, "scale")) p->tex_scale = clampf(v, 10, 400);
+        else if (!strcmp(key, "image")) p->img_mode = (u8)CLAMP((int)v, 0, IMG_ALONG);
+        else if (!strcmp(key, "spacing")) p->img_spacing = clampf(v, 5, 500);
+        else if (!strcmp(key, "flags")) p->img_flags = (u8)((int)v & 7);
+        else if (!strcmp(key, "width_light")) p->img_w0 = clampf(v, 2, 300);
+        else if (!strcmp(key, "width_heavy")) p->img_w1 = clampf(v, 2, 300);
     }
     if (tex) { tex[strcspn(tex, "\r\n")] = 0; snprintf(p->texture, sizeof(p->texture), "%s", tex); }
+    if (img) { img[strcspn(img, "\r\n")] = 0; snprintf(p->tip_image, sizeof(p->tip_image), "%s", img); }
+    if (!p->tip_image[0]) p->img_mode = IMG_NONE;
     return true;
 }
 
@@ -228,6 +237,9 @@ void app_apply_preset(int i) {
     app.taper_s = p->taper_s; app.taper_e = p->taper_e; app.brush_opacity = p->opacity; app.brush_fit = p->fit;
     snprintf(app.texture, sizeof(app.texture), "%s", p->texture);
     app.tex_density = p->tex_density; app.tex_scale = p->tex_scale;
+    snprintf(app.tip_image, sizeof(app.tip_image), "%s", p->tip_image);
+    app.img_mode = p->img_mode; app.img_flags = p->img_flags; app.img_spacing = p->img_spacing > 0 ? p->img_spacing : 80;
+    app.img_w0 = p->img_w0 > 0 ? p->img_w0 : 100; app.img_w1 = p->img_w1 > 0 ? p->img_w1 : 100;
 }
 
 void app_init(void) {
@@ -896,7 +908,7 @@ static void shortcuts(void) {
     for (int i = 0; i < COUNT(TOOLS); i++) if (TOOLS[i].k && act(TOOLS[i].act)) app.tool = TOOLS[i].k;
     float *size = app.tool == 'E' ? &app.eraser_size : app.tool == 'Y' ? &app.pencil_size : &app.brush_size;
     if (act(ACT_SMALLER)) *size = MAX(1, roundf(*size / 1.15f));
-    if (act(ACT_BIGGER)) *size = MIN(200, roundf(*size * 1.15f + 0.5f));
+    if (act(ACT_BIGGER)) *size = MIN(400, roundf(*size * 1.15f + 0.5f));
     if (act(ACT_SWAP_COLORS)) { Color t = app.fill; app.fill = app.stroke; app.stroke = t; }
     if (act(ACT_OBJECT_DRAW)) app.object_draw = !app.object_draw;
     if (in->key_pressed[SAPP_KEYCODE_ESCAPE] && !in->mods) app.doc->sel.on = false;

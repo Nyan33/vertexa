@@ -210,7 +210,7 @@ static void transform_item(Item *dst, const Item *src, Mat T) {
     for (ptrdiff_t i = 0; i < arrlen(dst->poly); i++) dst->poly[i] = mat_ap(T, dst->poly[i]);
     if (item_placed(dst) || (dst->kind == IT_FILL && dst->sym) || (dst->kind == IT_STROKE && dst->texture))
         dst->m = mat_mul(T, dst->m);   // bitmap fills and stroke textures move with their vector
-    if (dst->kind == IT_STROKE) dst->angle += atan2f(T.b, T.a);
+    if (dst->kind == IT_STROKE) { dst->angle += atan2f(T.b, T.a); dst->img_gap *= s; dst->img_r0 *= s; dst->img_r1 *= s; }
     item_bounds(dst);
 }
 

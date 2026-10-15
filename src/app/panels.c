@@ -9,11 +9,19 @@ static float cx_;          // layout cursor
 static Rect bar_;
 
 static void c_sep(void) { dl_rect(ui.dl, rect(cx_, bar_.y + 12, 1, 20), C_LINE2); cx_ += 1 + 18; }
+// a slider for sizes: the track squared, so small sizes get most of it
+static float slider_sq(UiId id, Rect r, float v, float lo, float hi) {
+    float t = sqrtf(clampf((v - lo) / (hi - lo), 0, 1));
+    float nt = ui_slider(id, r, t * 1000, 0, 1000) / 1000;
+    return nt == t ? v : lo + nt * nt * (hi - lo);
+}
+
 static void c_slider(const char *label, float *v, float lo, float hi, const char *fmt) {
     float lw = font_width(F_UI, label);
     font_draw_in(ui.dl, F_UI, rect(cx_, bar_.y, lw, bar_.h), ALIGN_LEFT, label, C_TX2);
     cx_ += lw + 10;
-    *v = roundf(ui_slider(ui_id(label), rect(cx_, bar_.y + 12, 96, 20), *v, lo, hi));
+    Rect sr = rect(cx_, bar_.y + 12, 96, 20);
+    *v = roundf(hi > 100 ? slider_sq(ui_id(label), sr, *v, lo, hi) : ui_slider(ui_id(label), sr, *v, lo, hi));
     cx_ += 96 + 10;
     char s[16]; snprintf(s, sizeof(s), fmt, (int)*v);
     font_draw_in(ui.dl, F_MONO_MED, rect(cx_, bar_.y, 30, bar_.h), ALIGN_LEFT, s, C_TX);
@@ -70,7 +78,7 @@ void context_bar(Rect r) {
     }
     switch (app.tool) {
     case 'B': {
-        c_slider("Size", &app.brush_size, 1, 100, "%d");
+        c_slider("Size", &app.brush_size, 1, 400, "%d");
         c_slider("Smoothing", &app.brush_smooth, 0, 100, "%d");
         c_sep();
         c_chip("Pressure", &app.brush_pressure, "Pen pressure changes the size");
@@ -223,11 +231,60 @@ void color_panel(Rect r) {
 
 /* ── brushes ── */
 
+// an image tip on the ribbon: stamps along it, or the image stretched over it (as the stage draws them)
+static void ribbon_image(const V2 *q, const float *hw, const float *wf, int N, const BrushPreset *p, Color c, u32 view, int tw, int th) {
+    static const float zero[4] = {0};
+    float s = ui.dl->scale, aspect = (float)th / tw, hmax = 0;
+    for (int i = 0; i <= N; i++) hmax = MAX(hmax, hw[i]);
+    bool fx = p->img_flags & IMGF_FLIP_X, fy = p->img_flags & IMGF_FLIP_Y;
+    float u0 = fx ? 1 : 0, u1 = fx ? 0 : 1, v0 = fy ? 1 : 0, v1 = fy ? 0 : 1;
+    u32 old = ui.dl->tex;
+    dl_set_tex(ui.dl, view);
+    dl_set_sampler(ui.dl, SMP_MIP);
+#define IV(P, U, V) dl_vtx_uvp(ui.dl, (P).x * s, (P).y * s, U, V, c, K_TIPMASK, zero)
+    if (p->img_mode == IMG_STAMPS) {
+        float gap = MAX(2.0f, p->img_spacing / 100 * 2 * hmax), since = gap;
+        float a = p->angle * VX_PI / 180, ca = cosf(a), sa = sinf(a);
+        for (int i = 0; i <= N; i++) {
+            if (i) since += hypotf(q[i].x - q[i - 1].x, q[i].y - q[i - 1].y);
+            if (since < gap) continue;
+            since = 0;
+            V2 d = v2(q[MIN(i + 1, N)].x - q[MAX(i - 1, 0)].x, q[MIN(i + 1, N)].y - q[MAX(i - 1, 0)].y);
+            float L = hypotf(d.x, d.y);
+            d = (p->img_flags & IMGF_FIXED) || L < 1e-4f ? v2(1, 0) : v2(d.x / L, d.y / L);
+            V2 ax = {d.x * ca - d.y * sa, d.x * sa + d.y * ca}, ay = {-ax.y, ax.x};
+            float hl = hw[i], hs = hw[i] * aspect * wf[i];
+            V2 c0 = q[i];
+            u32 v = IV(v2(c0.x - ax.x * hl - ay.x * hs, c0.y - ax.y * hl - ay.y * hs), u0, v0);
+            IV(v2(c0.x + ax.x * hl - ay.x * hs, c0.y + ax.y * hl - ay.y * hs), u1, v0);
+            IV(v2(c0.x + ax.x * hl + ay.x * hs, c0.y + ax.y * hl + ay.y * hs), u1, v1);
+            IV(v2(c0.x - ax.x * hl + ay.x * hs, c0.y - ax.y * hl + ay.y * hs), u0, v1);
+            dl_idx(ui.dl, v, v + 1, v + 2); dl_idx(ui.dl, v, v + 2, v + 3);
+        }
+    } else {
+        u32 prev = 0;
+        for (int i = 0; i <= N; i++) {
+            V2 d = v2(q[MIN(i + 1, N)].x - q[MAX(i - 1, 0)].x, q[MIN(i + 1, N)].y - q[MAX(i - 1, 0)].y);
+            float L = MAX(1e-4f, hypotf(d.x, d.y));
+            V2 n = v2(-d.y / L, d.x / L);
+            float u = lerpf(u0, u1, (float)i / N);
+            float h = hw[i] * wf[i];
+            u32 v = IV(v2(q[i].x - n.x * h, q[i].y - n.y * h), u, v0);
+            IV(v2(q[i].x + n.x * h, q[i].y + n.y * h), u, v1);
+            if (i) { dl_idx(ui.dl, prev, prev + 1, v + 1); dl_idx(ui.dl, prev, v + 1, v); }
+            prev = v;
+        }
+    }
+#undef IV
+    dl_set_sampler(ui.dl, SMP_LINEAR);
+    dl_set_tex(ui.dl, old);
+}
+
 // a stroke drawn with the preset, light, heavy, light: its outline from the size, pressure curve, tip and
 // tapers; with a texture, the grain shows through (a strip with soft one-pixel edges)
 static void ribbon(Rect r, const BrushPreset *p, Color c) {
     enum { N = 40 };
-    V2 q[N + 1]; float hw[N + 1];
+    V2 q[N + 1]; float hw[N + 1], wf[N + 1];
     float ls = p->taper_s / 200, le = p->taper_e / 200;   // taper lengths as parts of the ribbon (100 % = half)
     for (int i = 0; i <= N; i++) {
         float t = (float)i / N;
@@ -237,9 +294,14 @@ static void ribbon(Rect r, const BrushPreset *p, Color c) {
         if (le > 0) w *= MIN(1, (1 - t) / le);
         if (p->tip == TIP_OVAL) w *= 0.55f + 0.45f * fabsf(cosf(t * 2.2f + p->angle));
         hw[i] = clampf(w, 0.3f, r.h * 0.42f);
+        wf[i] = MAX(0.02f, lerpf(p->img_w0, p->img_w1, pr) / 100);   // image tips: width across by pressure
         q[i] = v2(r.x + 4 + t * (r.w - 8), r.y + r.h / 2 + sinf(t * VX_PI * 1.4f + p->angle) * 3);
     }
     c = col_alpha(c, p->opacity > 0 ? p->opacity / 100 : 1);
+    int ib = p->img_mode && p->tip_image[0] ? tipimg_bitmap(p->tip_image) : 0;
+    Bitmap *ibm = ib ? bitmap_get(ib) : NULL;
+    u32 iview = ibm ? bitmap_texture(ib) : 0;
+    if (iview && ibm->w > 0 && ibm->h > 0) { ribbon_image(q, hw, wf, N, p, c, iview, ibm->w, ibm->h); return; }
     int bm = p->texture[0] ? texture_bitmap(p->texture) : 0;
     Bitmap *b = bm ? bitmap_get(bm) : NULL;
     u32 view = b ? bitmap_texture(bm) : 0;
@@ -371,6 +433,9 @@ static void preset_from_app(BrushPreset *q) {
     q->taper_s = app.taper_s; q->taper_e = app.taper_e; q->opacity = app.brush_opacity; q->fit = app.brush_fit;
     snprintf(q->texture, sizeof(q->texture), "%s", app.texture);
     q->tex_density = app.tex_density; q->tex_scale = app.tex_scale;
+    snprintf(q->tip_image, sizeof(q->tip_image), "%s", app.tip_image);
+    q->img_mode = app.img_mode; q->img_flags = app.img_flags; q->img_spacing = app.img_spacing;
+    q->img_w0 = app.img_w0; q->img_w1 = app.img_w1;
 }
 
 void brush_new(void) {   // the brush in use as it is now, at the end of the list, opened for editing
@@ -436,16 +501,84 @@ static bool block(const char *id, const char *title, float x, float w, float *y,
     return *open;
 }
 
+static struct { bool on; Rect r; } IMG_DD;   // the tip image dropdown, drawn after the blocks
+static void image_dropdown(void) {
+    if (!IMG_DD.on) return;
+    int n = tipimg_count(), sel = 0;
+    const char *items[64];
+    int m = 0;
+    for (int i = 0; i < n && m < 64; i++) { items[m++] = tipimg_name(i); if (!strcmp(tipimg_name(i), app.tip_image)) sel = m - 1; }
+    if (!m) return;
+    int ns = ui_dropdown(ui_id("tip-pick"), IMG_DD.r, items, m, sel);
+    if (ns != sel) snprintf(app.tip_image, sizeof(app.tip_image), "%s", items[ns]);
+}
+
 static void shape_block(float x, float w, float *py) {
     float y = *py;
-    slider_row("brush-size", "Size", x, w, &y, &app.brush_size, 1, 100, "%d");
+    font_draw_in(ui.dl, F_UI, rect(x, y, 76, 20), ALIGN_LEFT, "Size", C_TX3);
+    app.brush_size = roundf(slider_sq(ui_id("brush-size"), rect(x + 84, y, w - 84 - 48, 20), app.brush_size, 1, 400));
+    char sz[16]; snprintf(sz, sizeof(sz), "%d", (int)app.brush_size);
+    font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, y, 44, 20), ALIGN_RIGHT, sz, C_TX);
+    y += 20;
     y += 14;
-    static const char *tips[] = {"Round", "Oval", "Square"};
+    // the tip: a vector shape, or an image stamped along the line or laid over all of it
+    static const char *tips[] = {"Round", "Oval", "Square", "Image"};
     font_draw_in(ui.dl, F_UI, rect(x, y + 5, 76, 20), ALIGN_LEFT, "Tip", C_TX3);
-    u8 tip = (u8)ui_segmented(ui_id("tip"), rect(x + 84, y, w - 84, 30), tips, 3, app.tip); y += 30;
-    if (tip == TIP_OVAL && app.tip != TIP_OVAL && app.tip_aspect > 0.95f) app.tip_aspect = 0.38f;
-    app.tip = tip;
-    if (app.tip != TIP_ROUND) {
+    int cur = app.img_mode ? 3 : app.tip;
+    int tip = ui_segmented(ui_id("tip"), rect(x + 84, y, w - 84, 30), tips, 4, cur); y += 30;
+    if (tip != cur && tip == 3) {
+        if (!app.tip_image[0] && tipimg_count()) snprintf(app.tip_image, sizeof(app.tip_image), "%s", tipimg_name(0));
+        if (!app.tip_image[0]) {
+            char path[512], name[48];
+            if (plat_open_dialog(path, sizeof(path), "Tip image", "*.png;*.jpg;*.jpeg;*.bmp") && tipimg_import(path, name, sizeof(name)))
+                snprintf(app.tip_image, sizeof(app.tip_image), "%s", name);
+        }
+        if (app.tip_image[0]) { app.img_mode = IMG_STAMPS; app.tip = TIP_ROUND; }
+    } else if (tip != cur) {
+        app.img_mode = IMG_NONE;
+        if (tip == TIP_OVAL && app.tip != TIP_OVAL && app.tip_aspect > 0.95f) app.tip_aspect = 0.38f;
+        app.tip = (u8)tip;
+    }
+    IMG_DD.on = false;
+    if (app.img_mode) {
+        y += 12;
+        font_draw_in(ui.dl, F_UI, rect(x, y + 5, 76, 20), ALIGN_LEFT, "Image", C_TX3);
+        if (small_icon(ui_id("tip-import"), rect(x + w - 30, y, 30, 30), IC_IMPORT, true, "Add a tip image (dark and opaque is ink)")) {
+            char path[512], name[48];
+            if (plat_open_dialog(path, sizeof(path), "Tip image", "*.png;*.jpg;*.jpeg;*.bmp")) {
+                if (tipimg_import(path, name, sizeof(name))) snprintf(app.tip_image, sizeof(app.tip_image), "%s", name);
+                else app_toast("Couldn't read that image");
+            }
+        }
+        IMG_DD.on = true; IMG_DD.r = rect(x + 84, y, w - 84 - 36, 30);   // drawn last, over what follows
+        y += 30 + 12;
+        static const char *place[] = {"Stamps", "Along the line"};
+        font_draw_in(ui.dl, F_UI, rect(x, y + 5, 76, 20), ALIGN_LEFT, "Place", C_TX3);
+        app.img_mode = (u8)(1 + ui_segmented(ui_id("tip-place"), rect(x + 84, y, w - 84, 30), place, 2, app.img_mode - 1)); y += 30;
+        if (app.img_mode == IMG_STAMPS) {
+            y += 12;
+            slider_row("tip-spacing", "Spacing", x, w, &y, &app.img_spacing, 5, 300, "%d%%");
+            y += 10;
+            slider_row("tip-angle", "Angle", x, w, &y, &app.tip_angle, 0, 359, "%d\xC2\xB0");
+        }
+        y += 12;
+        slider_row("tip-w0", "Width light", x, w, &y, &app.img_w0, 2, 300, "%d%%");
+        y += 10;
+        slider_row("tip-w1", "Width heavy", x, w, &y, &app.img_w1, 2, 300, "%d%%");
+        y += 12;
+        float cw = (w - 84 - 8) / 2;
+        Rect c1 = {x + 84, y, cw, 28}, c2 = {x + 84 + cw + 8, y, cw, 28};
+        font_draw_in(ui.dl, F_UI, rect(x, y + 4, 76, 20), ALIGN_LEFT, "Flip", C_TX3);
+        if (ui_chip("Along", c1, app.img_flags & IMGF_FLIP_X)) app.img_flags ^= IMGF_FLIP_X;
+        if (ui_chip("Across", c2, app.img_flags & IMGF_FLIP_Y)) app.img_flags ^= IMGF_FLIP_Y;
+        y += 28;
+        if (app.img_mode == IMG_STAMPS) {
+            y += 8;
+            Rect c3 = {x + 84, y, w - 84, 28};
+            if (ui_chip("Turn with the line", c3, !(app.img_flags & IMGF_FIXED))) app.img_flags ^= IMGF_FIXED;
+            y += 28;
+        }
+    } else if (app.tip != TIP_ROUND) {
         y += 12;
         slider_row("tip-angle", "Angle", x, w, &y, &app.tip_angle, 0, 180, "%d\xC2\xB0");
         if (app.tip == TIP_OVAL) {
@@ -569,6 +702,7 @@ static void brush_editor(Rect r) {
     y += 16;
     delete_button(i, x, w, &y);
     if (tex_open) texture_block(x, w, &ty);   // after the blocks below it: its dropdown list goes over them
+    if (open[0]) image_dropdown(); else IMG_DD.on = false;
     y += 16;
     content = y + scroll - r.y;
     if (content > r.h) {

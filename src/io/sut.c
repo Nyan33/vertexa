@@ -139,6 +139,51 @@ static void base_noext(const char *path, char *out, int cap) {
     if (dot) *dot = 0;
 }
 
+/* ── tip images ──
+   A brush's images are MaterialFile rows; FileData is a tar archive of the image material. Its picture
+   (data/material_0.layer) is protected, but thumbnail/thumbnail.png is a plain PNG of the same image,
+   which is what the tip uses (up to a few hundred pixels across). */
+
+static const u8 *tar_find(const u8 *t, int n, const char *want, u32 *size) {
+    for (int at = 0; at + 512 <= n;) {
+        const u8 *h = t + at;
+        if (!h[0]) break;
+        char name[101];
+        memcpy(name, h, 100); name[100] = 0;
+        u32 sz = 0;
+        for (int i = 124; i < 136 && h[i] >= '0' && h[i] <= '7'; i++) sz = sz * 8 + (u32)(h[i] - '0');
+        if (at + 512 + (int)sz > n) break;
+        if (!strcmp(name, want)) { *size = sz; return h + 512; }
+        at += 512 + (int)((sz + 511) / 512 * 512);
+    }
+    return NULL;
+}
+
+// the first image of the brush (pattern names the materials by their catalog paths, in UTF-16)
+static bool tip_image(sqlite3 *db, const u8 *pattern, int plen, const char *brush, char *name, int cap) {
+    char want[1024];
+    int k = 0;
+    for (int i = 0; i < plen && k < (int)sizeof(want) - 1; i++) if (pattern[i] >= 32 && pattern[i] < 127) want[k++] = (char)pattern[i];
+    want[k] = 0;
+    sqlite3_stmt *st = NULL;
+    bool ok = false;
+    if (SQ.prepare_v2(db, "SELECT CatalogPath, FileData FROM MaterialFile", -1, &st, NULL) || !st) return false;
+    for (int pass = 0; pass < 2 && !ok; pass++) {   // the one the brush names, else any
+        while (!ok && SQ.step(st) == SQ_ROW) {
+            const unsigned char *cp = SQ.column_text(st, 0);
+            if (!pass && (!cp || !cp[0] || !strstr(want, (const char *)cp))) continue;
+            const u8 *data = SQ.column_blob(st, 1);
+            int n = SQ.column_bytes(st, 1);
+            u32 size = 0;
+            const u8 *png = data ? tar_find(data, n, "thumbnail/thumbnail.png", &size) : NULL;
+            if (png && size > 8) ok = tipimg_add(brush, png, size, name, cap);
+        }
+        if (!ok) { SQ.finalize(st); st = NULL; if (SQ.prepare_v2(db, "SELECT CatalogPath, FileData FROM MaterialFile", -1, &st, NULL) || !st) break; }
+    }
+    if (st) SQ.finalize(st);
+    return ok;
+}
+
 static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx) {
     char q[96];
     snprintf(q, sizeof(q), "SELECT * FROM Variant WHERE VariantID = %lld", id);
@@ -149,7 +194,7 @@ static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx)
         r.n = SQ.column_count(r.st);
         int len;
         const u8 *b;
-        p->size = clampf(roundf(num(&r, "BrushSize", 10)), 1, 100);
+        p->size = clampf(roundf(num(&r, "BrushSize", 10)), 1, 400);
         p->smoothing = 50;
         Effector e;
         b = blob(&r, "BrushSizeEffector", &len);
@@ -164,8 +209,35 @@ static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx)
         p->taper_s = in ? 50 : 0; p->taper_e = out ? 50 : 0;
         p->opacity = clampf(roundf(num(&r, "Opacity", 100)), 1, 100);
         p->fit = p->smoothing; p->tex_density = 60; p->tex_scale = 100;
-        // what a solid vector tip cannot reproduce yet
-        if (num(&r, "BrushUsePatternImage", 0) != 0 && blob(&r, "BrushPatternImageArray", &len) && len > 0) *approx |= 1;
+        // an image tip: stamped (turned across the line, as feathers and leaves are), or laid along it (ribbon)
+        const u8 *pat = num(&r, "BrushUsePatternImage", 0) != 0 ? blob(&r, "BrushPatternImageArray", &len) : NULL;
+        if (pat && len > 0) {
+            u8 *copy = malloc((size_t)len);
+            memcpy(copy, pat, (size_t)len);
+            int plen = len;
+            char base[64];
+            snprintf(base, sizeof(base), "%s", p->name[0] ? p->name : "CSP tip");
+            if (tip_image(db, copy, plen, base, p->tip_image, sizeof(p->tip_image))) {
+                float rot = num(&r, "BrushRotation", 0);
+                float across = fabsf(fmodf(fabsf(rot), 180) - 90);   // 0: square to the line
+                p->img_mode = num(&r, "BrushRibbon", 0) != 0 && across > 30 ? IMG_ALONG : IMG_STAMPS;
+                p->img_spacing = clampf(num(&r, "BrushInterval", 80), 5, 300);
+                p->angle = p->img_mode == IMG_STAMPS ? roundf(fmodf(fmodf(rot, 360) + 360, 360)) : 0;
+                p->tip = TIP_ROUND; p->aspect = 1;
+                // CSP's thickness: across the image, by pressure (feathers: long and thin when light, short and round when heavy)
+                float tk = num(&r, "BrushThickness", 100) / 100;
+                p->img_w0 = p->img_w1 = 100 * tk;
+                Effector te;
+                b = blob(&r, "BrushThicknessEffector", &len);
+                if (effector(b, len, &te) && (te.inputs & IN_PRESSURE)) {
+                    Curve tc = csp_curve(&te);
+                    p->img_w0 = 100 * tk * curve_eval(&tc, 0); p->img_w1 = 100 * tk * curve_eval(&tc, 1);
+                }
+                if (p->img_mode == IMG_STAMPS) p->taper_s = p->taper_e = 0;   // a stamp is the whole tip
+                *approx |= 16;
+            } else *approx |= 1;
+            free(copy);
+        }
         if (has(&r, "TextureImage") && blob(&r, "TextureImage", &len) && len > 0) *approx |= 2;
         if (num(&r, "BrushUseSpray", 0) != 0) *approx |= 4;
         if (num(&r, "BrushUseWaterColor", 0) != 0 || num(&r, "BrushUseWaterEdge", 0) != 0) *approx |= 8;
@@ -206,10 +278,10 @@ bool import_sut(const char *path, char *msg, int cap) {
     BrushPreset last = {0};
     for (ptrdiff_t i = 0; i < arrlen(nodes); i++) {
         BrushPreset p = {0};
-        if (!read_variant(db, nodes[i].variant, &p, &approx)) continue;
         const char *name = nodes[i].name[0] && font_covers(nodes[i].name) ? nodes[i].name : fallback;
         if (arrlen(nodes) > 1 && name == fallback) snprintf(p.name, sizeof(p.name), "%s %d", fallback, (int)i + 1);
         else snprintf(p.name, sizeof(p.name), "%s", name);
+        if (!read_variant(db, nodes[i].variant, &p, &approx)) continue;
         app_add_preset(&p);
         last = p;
         added++;
@@ -228,8 +300,9 @@ bool import_sut(const char *path, char *msg, int cap) {
         snprintf(what, sizeof(what), "Imported \"%s\": %d px, %s tip%s", last.name, (int)last.size, tips[last.tip],
                  flat ? "" : ", pressure curve");
     } else snprintf(what, sizeof(what), "Imported %d brushes from %s", added, fallback);
-    if (approx) snprintf(msg, (size_t)cap, "%s. %s drawn as a solid vector tip", what,
+    if (approx & 15) snprintf(msg, (size_t)cap, "%s. %s drawn as a solid vector tip", what,
                          approx & 3 ? "texture" : approx & 4 ? "spray" : "watercolor");
+    else if (approx & 16) snprintf(msg, (size_t)cap, "%s, its tip image (from the brush's preview)", what);
     else snprintf(msg, (size_t)cap, "%s", what);
     return true;
 }

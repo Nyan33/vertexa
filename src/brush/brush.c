@@ -89,6 +89,25 @@ static void apply_taper(SPt *pts, int n, float ls, float le) {
     free(s);
 }
 
+void stroke_set_image(Stroke *s, const BrushOpts *o) {
+    s->img = o->img_mode && o->img ? o->img : 0;
+    s->img_mode = s->img ? o->img_mode : IMG_NONE;
+    s->img_flags = o->img_flags;
+    s->img_gap = MAX(0.5f, o->img_spacing * o->size);
+    s->img_r0 = o->size / 2 * (o->pressure ? curve_eval(&o->curve, 0) : 1);
+    s->img_r1 = o->size / 2 * (o->pressure ? curve_eval(&o->curve, 1) : 1);
+    s->img_w0 = o->pressure ? o->img_w0 : o->img_w1;
+    s->img_w1 = o->img_w1;
+}
+
+// how wide the image is across at a point of radius r (pressure gives both its size and its width)
+static float img_width(const Stroke *st, float r) {
+    if (st->img_w0 <= 0 && st->img_w1 <= 0) return 1;
+    float d = st->img_r1 - st->img_r0;
+    float t = fabsf(d) < 1e-5f ? 1 : clampf((r - st->img_r0) / d, 0, 1);
+    return MAX(0.02f, lerpf(st->img_w0, st->img_w1, t));
+}
+
 void stroke_set_texture(Stroke *s, int bitmap, float density, float scale) {
     s->texture = bitmap > 0;
     s->sym = bitmap > 0 ? bitmap : 0;
@@ -104,7 +123,7 @@ void bb_live(Builder *b, Stroke *out) {
     memset(out, 0, sizeof(*out));
     out->pts = scratch;
     out->color = b->o.color; out->tip = b->o.tip; out->angle = b->o.angle; out->aspect = b->o.aspect; out->erase = b->o.erase;
-    if (!b->o.erase) stroke_set_texture(out, b->o.tex, b->o.tex_density, b->o.tex_scale);
+    if (!b->o.erase) { stroke_set_texture(out, b->o.tex, b->o.tex_density, b->o.tex_scale); stroke_set_image(out, &b->o); }
     stroke_bounds(out);
 }
 
@@ -148,7 +167,7 @@ Stroke bb_finish(Builder *b) {
     Stroke s = {0};
     s.pts = simplify(b->pts, n, eps);
     s.color = b->o.color; s.tip = b->o.tip; s.angle = b->o.angle; s.aspect = b->o.aspect; s.erase = b->o.erase;
-    if (!b->o.erase) stroke_set_texture(&s, b->o.tex, b->o.tex_density, b->o.tex_scale);
+    if (!b->o.erase) { stroke_set_texture(&s, b->o.tex, b->o.tex_density, b->o.tex_scale); stroke_set_image(&s, &b->o); }
     stroke_bounds(&s);
     bb_free(b);
     return s;
@@ -357,13 +376,95 @@ static void draw_run(Em *e, const Stroke *st, const SPt *p, int n, float scale) 
     }
 }
 
+/* ── image strokes: the tip image stamped along the centerline, or stretched over all of it ── */
+
+static void img_vtx(DrawList *dl, Mat m, V2 p, float u, float v, Color c, u32 *first) {
+    static const float zero[4] = {0};
+    V2 s = mat_ap(m, p);
+    u32 i = dl_vtx_uvp(dl, s.x, s.y, u, v, c, K_TIPMASK, zero);
+    if (first) *first = i;
+}
+
+static void image_draw(DrawList *dl, const Stroke *st, Mat m, Color color, u32 view, int tw, int th) {
+    float scale = mat_scalef(m);
+    float rmax = 0;
+    for (ptrdiff_t i = 0; i < arrlen(st->pts); i++) rmax = MAX(rmax, st->pts[i].r);
+    if (rmax <= 0) return;
+    float aspect = (float)th / tw;   // the image lies with its width along the stroke
+    bool fx = st->img_flags & IMGF_FLIP_X, fy = st->img_flags & IMGF_FLIP_Y;
+    float u0 = fx ? 1 : 0, u1 = fx ? 0 : 1, v0 = fy ? 1 : 0, v1 = fy ? 0 : 1;
+    u32 old = dl->tex;
+    dl_set_tex(dl, view);
+    dl_set_sampler(dl, SMP_MIP);
+    dl_set_pipe(dl, PIPE_NORMAL);
+    float step = st->img_mode == IMG_STAMPS ? MAX(0.25f, MIN(st->img_gap / 6, rmax / 2)) : MAX(0.25f, 1.5f / scale);
+    SPt *p = brush_resample(st, step);
+    int n = (int)arrlen(p);
+    if (st->img_mode == IMG_STAMPS) {
+        // one at the start, then one every img_gap along the line, turned with it (plus the tip angle)
+        float ca = cosf(st->angle), sa = sinf(st->angle);
+        float since = st->img_gap;   // distance walked since the last stamp
+        for (int i = 0; i < MAX(n, 1); i++) {
+            SPt a = n ? p[i] : st->pts[0];
+            V2 d = {1, 0};
+            if (n > 1) {
+                SPt b = p[MIN(i + 1, n - 1)], c = p[MAX(i - 1, 0)];
+                float dx = b.x - c.x, dy = b.y - c.y, L = hypotf(dx, dy);
+                if (L > 1e-6f) d = v2(dx / L, dy / L);
+            }
+            if (i) since += hypotf(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
+            if (since < st->img_gap) continue;
+            since = 0;
+            if (st->img_flags & IMGF_FIXED) d = v2(1, 0);
+            V2 ax = {d.x * ca - d.y * sa, d.x * sa + d.y * ca}, ay = {-ax.y, ax.x};
+            float hl = a.r, hs = a.r * aspect * img_width(st, a.r);   // half length, half width
+            V2 c = {a.x, a.y};
+            u32 q;
+            img_vtx(dl, m, v2(c.x - ax.x * hl - ay.x * hs, c.y - ax.y * hl - ay.y * hs), u0, v0, color, &q);
+            img_vtx(dl, m, v2(c.x + ax.x * hl - ay.x * hs, c.y + ax.y * hl - ay.y * hs), u1, v0, color, NULL);
+            img_vtx(dl, m, v2(c.x + ax.x * hl + ay.x * hs, c.y + ax.y * hl + ay.y * hs), u1, v1, color, NULL);
+            img_vtx(dl, m, v2(c.x - ax.x * hl + ay.x * hs, c.y - ax.y * hl + ay.y * hs), u0, v1, color, NULL);
+            dl_idx(dl, q, q + 1, q + 2); dl_idx(dl, q, q + 2, q + 3);
+        }
+    } else if (n > 1) {
+        // a strip: the image's width over the whole length, its height across the stroke
+        float L = 0;
+        for (int i = 1; i < n; i++) L += hypotf(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
+        if (L <= 1e-6f) goto done;
+        float s = 0;
+        u32 q0 = 0;
+        for (int i = 0; i < n; i++) {
+            if (i) s += hypotf(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
+            SPt b = p[MIN(i + 1, n - 1)], c = p[MAX(i - 1, 0)];
+            float dx = b.x - c.x, dy = b.y - c.y, dl2 = MAX(1e-6f, hypotf(dx, dy));
+            V2 nrm = {-dy / dl2, dx / dl2};
+            float u = lerpf(u0, u1, s / L), w = p[i].r * img_width(st, p[i].r);
+            u32 q;
+            img_vtx(dl, m, v2(p[i].x - nrm.x * w, p[i].y - nrm.y * w), u, v0, color, &q);
+            img_vtx(dl, m, v2(p[i].x + nrm.x * w, p[i].y + nrm.y * w), u, v1, color, NULL);
+            if (i) dl_idx(dl, q0, q0 + 1, q + 1), dl_idx(dl, q0, q + 1, q);
+            q0 = q;
+        }
+    }
+done:
+    dl_set_sampler(dl, SMP_LINEAR);
+    dl_set_tex(dl, old);
+}
+
 void brush_draw(DrawList *dl, const Stroke *st, Mat m, Color color, bool erase) {
     int n = (int)arrlen(st->pts);
     if (!n) return;
     float scale = mat_scalef(m);
     if (scale < 1e-6f) return;
     Rect v = view_px(dl);
-    if (!box_visible(m, st->bx0, st->by0, st->bx1, st->by1, v)) return;
+    float ipad = 0;
+    if (st->img_mode && st->img) for (int i = 0; i < n; i++) ipad = MAX(ipad, st->pts[i].r);   // stamps reach past the swept outline
+    if (!box_visible(m, st->bx0 - ipad, st->by0 - ipad, st->bx1 + ipad, st->by1 + ipad, v)) return;
+    if (st->img_mode && st->img && !erase && cover_kind == K_SOLID && !cover_defer && tex_fn) {
+        int tw = 0, th = 0;
+        u32 view = tex_fn(st->img, &tw, &th);
+        if (view && tw > 0 && th > 0) { image_draw(dl, st, m, color, view, tw, th); return; }
+    }
     Em e = {dl, m};
     dl_set_pipe(dl, PIPE_STENCIL);
     static SPt *run;
