@@ -1,7 +1,15 @@
-# Vertexa v2
+# Vertexa
 
 2D vector animation studio in the spirit of Flash / Adobe Animate, aimed at Friday Night Funkin' animators.
 Rewritten from scratch in **C + sokol** with its own GPU-drawn UI (design: `mockups/a3-graphite.html`).
+What changed since the old Qt version: [CHANGELOG.md](CHANGELOG.md).
+
+## Download
+
+Every push to `main` is built for Windows x64 and published on the
+[Releases](https://github.com/Nyan33/vertexa/releases) page under a new tag `bN` (N = the number of commits),
+named after the commit, the way llama.cpp does it. Unzip and run `vertexa.exe`; the build is not code-signed,
+so SmartScreen may ask (*More info, Run anyway*).
 
 ## Build (Windows)
 
@@ -133,6 +141,10 @@ Working:
 
 Not yet: pen and text tools, bones, editing gradients (FLA gradients are drawn), bevel and gradient filters,
 bitmaps of binary (pre-CS5) FLA files, texture brushes, audio scrubbing.
+
+## License
+
+Vertexa is free software under the [GNU General Public License v3.0](LICENSE).
 
 ## Third-party
 
