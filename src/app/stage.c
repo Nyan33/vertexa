@@ -497,7 +497,7 @@ static void paper(DrawList *dl, Mat view, Doc *d) {
     V2 a = mat_ap(view, v2(0, 0)), b = mat_ap(view, v2((float)d->w, (float)d->h));
     dl_set_pipe(dl, PIPE_NORMAL);
     dl_shadow(dl, rect(a.x, a.y + 18, b.x - a.x, b.y - a.y), 2, 40, hexa(0x000000, 0xb0));
-    dl_rect(dl, rect(a.x, a.y, b.x - a.x, b.y - a.y), hex(0xffffff));
+    dl_rect(dl, rect(a.x, a.y, b.x - a.x, b.y - a.y), d->bg | 0xff000000u);
 }
 
 int stage_lists(DrawList **out, int cap) {

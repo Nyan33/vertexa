@@ -619,6 +619,76 @@ static void section(float *y, Rect r, const char *title) {
     *y += 26;
 }
 
+// the ease of a tween as a graph (time across, progress up); a custom curve can be shaped: drag its points,
+// double-click the graph to add a point, right-click one to take it away
+static void ease_graph(Rect g, Key *k) {
+    Doc *d = app.doc;
+    dl_rrect(ui.dl, g, 8, C_S2);
+    dl_rrect_border(ui.dl, g, 8, 1, C_LINE);
+    Rect a = rect_inset(g, 14, 12);
+    const float y0 = -0.3f, y1 = 1.3f;   // room for back and elastic overshoot
+    #define GX(v) (a.x + (v) * a.w)
+    #define GY(v) (a.y + a.h - ((v) - y0) / (y1 - y0) * a.h)
+    dl_rect(ui.dl, rect(a.x, roundf(GY(0)), a.w, 1), C_LINE2);
+    dl_rect(ui.dl, rect(a.x, roundf(GY(1)), a.w, 1), C_LINE2);
+    dl_line(ui.dl, v2(GX(0), GY(0)), v2(GX(1), GY(1)), 1, col_a(C_TX3, 0x60));
+    V2 prev = {GX(0), GY(key_ease(k, 0))};
+    for (int i = 1; i <= 80; i++) {
+        float t = i / 80.0f;
+        V2 q = {GX(t), GY(key_ease(k, t))};
+        dl_line(ui.dl, prev, q, 2, C_AC);
+        prev = q;
+    }
+    if (k->ease != EASE_CUSTOM || k->nez < 4) {
+        font_draw_in(ui.dl, F_SMALL, rect(g.x + 10, g.y + g.h - 20, g.w - 20, 16), ALIGN_RIGHT, "time", C_TX3);
+        return;
+    }
+    static int drag = -1;
+    int hover = -1, remove = -1;
+    for (int i = 0; i < k->nez; i++) {   // handles: lines from the anchors to their controls
+        if (i % 3 == 1) dl_line(ui.dl, v2(GX(k->ez[i - 1].x), GY(k->ez[i - 1].y)), v2(GX(k->ez[i].x), GY(k->ez[i].y)), 1, C_TX3);
+        if (i % 3 == 2) dl_line(ui.dl, v2(GX(k->ez[i + 1].x), GY(k->ez[i + 1].y)), v2(GX(k->ez[i].x), GY(k->ez[i].y)), 1, C_TX3);
+    }
+    for (int i = 0; i < k->nez; i++) {
+        V2 c = {GX(k->ez[i].x), GY(k->ez[i].y)};
+        bool anchor = i % 3 == 0, fixed = i == 0 || i == k->nez - 1;
+        UiResp re = ui_interact(ui_idi("ease-pt", i), rect(c.x - 7, c.y - 7, 14, 14));
+        if (re.hover) hover = i;
+        if (re.pressed && !fixed) { app_commit(); drag = i; }
+        if (re.right && anchor && !fixed) remove = i;
+        if (drag == i && re.held) {
+            V2 q = {clampf((ui.in.mouse.x - a.x) / a.w, 0, 1), clampf(y0 + (a.y + a.h - ui.in.mouse.y) / a.h * (y1 - y0), y0, y1)};
+            int lo = anchor ? i - 3 : (i % 3 == 1 ? i - 1 : i - 2), hi = anchor ? i + 3 : (i % 3 == 1 ? i + 2 : i + 1);
+            q.x = clampf(q.x, k->ez[lo].x, k->ez[hi].x);   // time only goes forward
+            V2 dlt = {q.x - k->ez[i].x, q.y - k->ez[i].y};
+            k->ez[i] = q;
+            if (anchor) { k->ez[i - 1].x += dlt.x; k->ez[i - 1].y += dlt.y; k->ez[i + 1].x += dlt.x; k->ez[i + 1].y += dlt.y; }   // its handles come along
+            doc_touch(d);
+        }
+        if (fixed && !anchor) {}
+        dl_circle(ui.dl, c, anchor ? 4.5f : 3.5f, anchor ? C_TX : C_S4);
+        dl_circle_border(ui.dl, c, anchor ? 4.5f : 3.5f, 1.5f, re.hover || drag == i ? C_AC : C_TX2);
+    }
+    if (!ui.in.down[0]) drag = -1;
+    if (remove > 0) { app_commit(); for (int i = remove - 1; i + 3 < k->nez; i++) k->ez[i] = k->ez[i + 3]; k->nez -= 3; doc_touch(d); }
+    UiResp gr = ui_interact(ui_id("ease-graph"), a);
+    if (gr.dbl && hover < 0 && k->nez + 3 <= EASE_PTS) {   // a new point on the curve where it was clicked
+        float t = clampf((ui.in.mouse.x - a.x) / a.w, 0.02f, 0.98f), y = key_ease(k, t);
+        int s = 0;
+        while (s + 1 < (k->nez - 1) / 3 && t > k->ez[s * 3 + 3].x) s++;
+        int at = s * 3 + 2;   // after the segment's second control
+        app_commit();
+        for (int i = k->nez - 1; i >= at; i--) k->ez[i + 3] = k->ez[i];
+        k->ez[at] = v2(t - 0.08f, y); k->ez[at + 1] = v2(t, y); k->ez[at + 2] = v2(t + 0.08f, y);
+        k->ez[at].x = MAX(k->ez[at].x, k->ez[at - 2 > 0 ? at - 2 : 0].x);
+        k->nez += 3;
+        doc_touch(d);
+    }
+    ui_tooltip(ui_id("ease-graph"), a, "Drag the points. Double-click adds a point, right-click takes it away");
+    #undef GX
+    #undef GY
+}
+
 // a labelled slider row; returns true when the value changed (rounded to step)
 static bool srow(float *y, Rect r, const char *label, UiId id, float *v, float lo, float hi, float step, float shown, const char *fmt) {
     float fx = r.x + 16 + 92, fw = r.w - 32 - 92;
@@ -823,6 +893,30 @@ static void props_tab(Rect r) {
             if (sel != k->tw) { app_commit(); k = doc_key_at(doc_active(app.doc), doc_tl(app.doc)->frame); k->tw = (u8)sel; doc_touch(app.doc); }
             y += 40;
         }
+        // the ease of the tween this frame is in
+        Key *tk = doc_key_for(l, doc_tl(d)->frame);
+        if (tk && tk->tw != TW_NONE) {
+            prow(&y, r, "Ease");
+            int e = ui_dropdown(ui_id("ease"), rect(fx, y, fw, 30), EASE_NAMES, EASE_COUNT, tk->ease);
+            if (e != tk->ease) {
+                app_commit();
+                tk->ease = (u8)e;
+                if (e == EASE_CUSTOM && tk->nez < 4) key_ease_custom_default(tk);
+                if (e == EASE_CLASSIC && tk->ease_amt == 0) tk->ease_amt = 50;
+                doc_touch(d);
+            }
+            y += 40;
+            if (tk->ease == EASE_CLASSIC) {
+                if (srow(&y, r, "Amount", ui_id("ease-amt"), &tk->ease_amt, -100, 100, 1, 1, "%.0f")) doc_touch(d);
+            } else if (tk->ease >= EASE_QUAD && tk->ease <= EASE_ELASTIC) {
+                static const char *dirs[] = {"In", "Out", "In-Out"};
+                prow(&y, r, "Direction");
+                int dsel = ui_segmented(ui_id("ease-dir"), rect(fx, y, fw, 28), dirs, 3, tk->ease_dir);
+                if (dsel != tk->ease_dir) { app_commit(); tk->ease_dir = (u8)dsel; doc_touch(d); }
+                y += 36;
+            }
+            if (tk->ease != EASE_NONE) { ease_graph(rect(r.x + 16, y, r.w - 32, 150), tk); y += 160; }
+        }
         y += 10;
     }
     if (l) {
@@ -847,6 +941,7 @@ static void props_tab(Rect r) {
     }
     section(&y, r, "Document");
     char s[48];
+    if (swatch_row(&y, r, "Background", ui_id("doc-bg"), d->bg)) { app_commit(); app.doc->bg = app.fill | 0xff000000u; doc_touch(app.doc); }
     prow(&y, r, "Size"); snprintf(s, sizeof(s), "%d \xC3\x97 %d", d->w, d->h);
     font_draw_in(ui.dl, F_MONO_MED, rect(fx, y, fw, 30), ALIGN_LEFT, s, C_TX); y += 32;
     prow(&y, r, "Frame rate"); snprintf(s, sizeof(s), "%d fps", d->fps);

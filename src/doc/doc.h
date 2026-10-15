@@ -68,7 +68,18 @@ typedef Item Stroke;   // brush code still speaks about strokes
 typedef struct { Item *items; bool used; } Drawing;
 
 // d: drawing index, -1 = blank. cam (camera layers): centre x, y, zoom, rotation; zoom 0 = the whole stage
-typedef struct { int f; int d; u8 tw; char label[32]; float cam[4]; } Key;
+// Ease of a tween (on its first key): Animate's classic ease (amount -100 in .. 100 out), its preset families
+// with in / out / in-out, or a custom curve: cubic Bezier segments a0 c c a1 c c a2 ... from (0,0) to (1,1)
+enum { EASE_NONE, EASE_CLASSIC, EASE_QUAD, EASE_CUBIC, EASE_QUART, EASE_QUINT, EASE_SINE, EASE_BACK, EASE_CIRC,
+       EASE_BOUNCE, EASE_ELASTIC, EASE_CUSTOM, EASE_COUNT };
+enum { EASE_IN, EASE_OUT, EASE_INOUT };
+extern const char *EASE_NAMES[EASE_COUNT];
+#define EASE_PTS 13   // up to four segments
+typedef struct { int f; int d; u8 tw; char label[32]; float cam[4];
+                 u8 ease, ease_dir, nez; float ease_amt; V2 ez[EASE_PTS]; } Key;
+float key_ease(const Key *k, float t);   // eased 0..1 for the tween that starts at k
+void key_ease_custom_default(Key *k);
+bool ease_from_name(const char *method, u8 *ease, u8 *dir);   // XFL method names (quadIn, backOut, ...)
 
 typedef struct {
     int id;
@@ -113,6 +124,7 @@ typedef struct Doc {
     int next_id;
     Sel sel;
     ExportSettings xp;
+    Color bg;             // background colour (the stage paper)
     u32 version;          // bumped on every content change
 } Doc;
 

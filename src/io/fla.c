@@ -913,6 +913,25 @@ static Timeline xfl_timeline(Ctx *c, XNode *tlnode) {
             const char *tw = xml_attr(f, "tweenType");
             key.tw = tw && !strcmp(tw, "motion") ? TW_CLASSIC : tw && !strcmp(tw, "shape") ? TW_SHAPE : TW_NONE;
             if (tw && strcmp(tw, "motion") && strcmp(tw, "shape")) warn(c, "Motion tweens were imported as keyframes");
+            // the ease: a custom curve, a preset (Ease method), or the classic acceleration
+            XNode *tws = xml_child(f, "tweens");
+            for (int q = 0; tws && q < xml_nkids(tws); q++) {
+                XNode *e = xml_kid(tws, q);
+                const char *tg = xml_attr(e, "target");
+                if (tg && strcmp(tg, "all")) continue;
+                if (!strcmp(xml_name(e), "CustomEase")) {
+                    key.ease = EASE_CUSTOM; key.nez = 0;
+                    for (int r = 0; r < xml_nkids(e) && key.nez < EASE_PTS; r++)
+                        if (!strcmp(xml_name(xml_kid(e, r)), "Point")) key.ez[key.nez++] = v2(xnum(xml_kid(e, r), "x", 0), xnum(xml_kid(e, r), "y", 0));
+                    key.nez = (u8)(key.nez >= 4 ? 1 + (key.nez - 1) / 3 * 3 : 0);
+                    if (!key.nez) key.ease = EASE_NONE;
+                    else { key.ez[0] = v2(0, 0); key.ez[key.nez - 1] = v2(1, 1); }
+                    break;
+                }
+                if (!strcmp(xml_name(e), "Ease") && ease_from_name(xml_attr(e, "method"), &key.ease, &key.ease_dir)) break;
+            }
+            if (key.ease == EASE_NONE && ease_from_name(xml_attr(f, "easeMethodName"), &key.ease, &key.ease_dir)) {}
+            if (key.ease == EASE_NONE && xml_attr(f, "acceleration")) { key.ease = EASE_CLASSIC; key.ease_amt = clampf(xnum(f, "acceleration", 0), -100, 100); }
             const char *lab = xml_attr(f, "name"), *ltp = xml_attr(f, "labelType");
             if (lab && (!ltp || !strcmp(ltp, "name"))) snprintf(key.label, sizeof(key.label), "%s", lab);
             if (type != LT_FOLDER) key.d = add_drawing(c, items);
@@ -941,6 +960,7 @@ static Doc *import_xfl_src(Src *src, char *err, int cap) {
     Ctx c = {0};
     Doc *d = c.d = calloc(1, sizeof(Doc));
     d->w = (int)xnum(root, "width", 550); d->h = (int)xnum(root, "height", 400); d->fps = MAX(1, (int)roundf(xnum(root, "frameRate", 24)));
+    d->bg = xcolor(root, "backgroundColor", "__none", hex(0xffffff));
     d->next_id = 1; d->loop_a = 1; d->loop_b = 24; d->onion_prev = 2; d->onion_next = 1;
     // library: register every symbol first, instances refer to them by name
     XNode *syms = xml_child(root, "symbols");

@@ -237,10 +237,11 @@ static void capture_frame(void) {
     u8 *px = malloc(n * 4);
     if (!plat_read_image(J.tgt.res, J.w, J.h, px)) { free(px); return; }
     unpremultiply(px, (int)n);
-    if (J.kind == JOB_THUMB) {   // on white paper, as on the stage
+    if (J.kind == JOB_THUMB) {   // on the paper, as on the stage
+        Color bg = app.doc->bg;
         for (size_t i = 0; i < n; i++) {
             u8 *p = px + i * 4; int a = p[3];
-            for (int c = 0; c < 3; c++) p[c] = (u8)((p[c] * a + 255 * (255 - a)) / 255);
+            for (int c = 0; c < 3; c++) p[c] = (u8)((p[c] * a + (int)((bg >> (8 * c)) & 255) * (255 - a)) / 255);
             p[3] = 255;
         }
         if (stbi_write_png(J.path, J.w, J.h, 4, px, J.w * 4)) home_thumb_ready(J.path);

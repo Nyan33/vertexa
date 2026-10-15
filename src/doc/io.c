@@ -5,7 +5,7 @@
 #include <windows.h>
 
 #define VXA_MAGIC 0x32415856u   // "VXA2"
-#define VXA_VERSION 4u   // 2: camera keys, audio layers and the embedded sounds; 3: export settings;
+#define VXA_VERSION 5u   // 5: eases on keys, the background colour   // 2: camera keys, audio layers and the embedded sounds; 3: export settings;
                          // 4: bitmaps, item blend modes, see-through layers, Animate's blend mode order
 
 typedef struct { u8 *p; size_t n; } Buf;
@@ -27,6 +27,9 @@ static void put_timeline(Buf *b, const Timeline *t) {
             const Key *key = &l->keys[k];
             put32(b, (u32)key->f); put32(b, (u32)key->d); put32(b, key->tw); putstr(b, key->label, 32);
             for (int c = 0; c < 4; c++) putf(b, key->cam[c]);
+            u8 e[4] = {key->ease, key->ease_dir, key->nez, 0};
+            put(b, e, 4); putf(b, key->ease_amt);
+            for (int q = 0; q < key->nez; q++) { putf(b, key->ez[q].x); putf(b, key->ez[q].y); }
         }
         put32(b, (u32)l->sound); put32(b, (u32)l->sound_frame);
     }
@@ -121,6 +124,7 @@ bool doc_save(Doc *d, const char *path) {
     }
     put32(&b, (u32)arrlen(d->bitmaps));
     for (ptrdiff_t i = 0; i < arrlen(d->bitmaps); i++) put32(&b, (u32)d->bitmaps[i]);
+    put32(&b, d->bg);   // 5
     arrfree(bms);
     char tmp[600];
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
@@ -163,6 +167,13 @@ static void get_timeline(Rd *r, Timeline *t) {
             Key key = {0};
             key.f = (int)get32(r); key.d = (int)get32(r); key.tw = (u8)get32(r); getstr(r, key.label, 32);
             if (file_ver >= 2) for (int c = 0; c < 4; c++) key.cam[c] = getf(r);
+            if (file_ver >= 5) {
+                u8 e[4]; get(r, e, 4);
+                key.ease = e[0] < EASE_COUNT ? e[0] : EASE_NONE; key.ease_dir = e[1] <= EASE_INOUT ? e[1] : EASE_IN; key.nez = MIN(e[2], EASE_PTS);
+                key.ease_amt = getf(r);
+                for (int q = 0; q < key.nez; q++) { key.ez[q].x = getf(r); key.ez[q].y = getf(r); }
+                if (key.ease == EASE_CUSTOM && key.nez < 4) key.ease = EASE_NONE;
+            }
             arrput(l.keys, key);
         }
         if (file_ver >= 2) { l.sound = (int)get32(r); l.sound_frame = (int)get32(r); }
@@ -185,6 +196,7 @@ Doc *doc_load(const char *path, char *err, int errcap) {
     file_ver = ver;
     if (ver > VXA_VERSION) { free(data); snprintf(err, errcap, "This file comes from a newer Vertexa (format %u)", ver); return NULL; }
     Doc *d = calloc(1, sizeof(Doc));
+    d->bg = hex(0xffffff);
     getstr(&r, d->name, 64);
     d->w = (int)get32(&r); d->h = (int)get32(&r); d->fps = (int)get32(&r);
     d->loop_on = get32(&r) != 0; d->loop_a = (int)get32(&r); d->loop_b = (int)get32(&r);
@@ -308,6 +320,7 @@ Doc *doc_load(const char *path, char *err, int errcap) {
             }
         arrfree(map);
     }
+    if (file_ver >= 5 && !r.bad) d->bg = get32(&r) | 0xff000000u;
     free(data);
     // validate references, so a damaged file can't crash the editor
     bool ok = !r.bad && d->w > 0 && d->h > 0 && d->fps > 0 && arrlen(d->scene.layers) > 0;

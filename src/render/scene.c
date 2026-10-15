@@ -688,7 +688,7 @@ static void render_layer(Frame *F, Doc *d, Layer *l, int frame, Mat m, float alp
     Drawing *dr = k->d >= 0 ? &d->drawings[k->d] : NULL;
     Key *next = ki + 1 < arrlen(l->keys) ? &l->keys[ki + 1] : NULL;
     Drawing *ndr = next && next->d >= 0 ? &d->drawings[next->d] : NULL;
-    float t01 = next ? (float)(frame - k->f) / (float)(next->f - k->f) : 0;
+    float t01 = next ? key_ease(k, (float)(frame - k->f) / (float)(next->f - k->f)) : 0;
     int off = frame - k->f;
     // a see-through layer shows at its percentage (Animate's alphaPercent, 50 by default) while editing;
     // as in Animate it is an editing aid, exports draw the layer fully
@@ -698,7 +698,7 @@ static void render_layer(Frame *F, Doc *d, Layer *l, int frame, Mat m, float alp
     bool done = false;
     if (k->tw == TW_CLASSIC && next && frame > k->f) {
         const Item *ia = single_instance(dr), *ib = single_instance(ndr);
-        if (ia && ib && ia->kind == ib->kind && ia->sym == ib->sym) {
+        if (ia && ib && ia->kind == ib->kind) {
             Item tmp = *ia;
             tmp.m = mat_lerp(ia->m, ib->m, t01);
             tmp.alpha = lerpf(ia->alpha, ib->alpha, t01);

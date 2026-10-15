@@ -26,6 +26,7 @@ static struct {
     double bench_cpu, bench_dt; int bench_n;
     const char *open;
     int goto_frame;              // --frame=N: show this frame of the opened document
+    int goto_layer;              // --layer=N: make the Nth layer (from the top) active and show Properties
     int key_release;
     int variant;   // --selftest=menu | --selftest=layers
     int frames;
@@ -589,6 +590,7 @@ static void init(void) {
     if (M.demo) stage_demo();
     if (M.open) app_open_path(M.open);
     if (M.goto_frame > 0) doc_tl(app.doc)->frame = M.goto_frame;
+    if (M.goto_layer > 0 && M.goto_layer <= arrlen(doc_tl(app.doc)->layers)) { doc_tl(app.doc)->active = doc_tl(app.doc)->layers[M.goto_layer - 1].id; app.right_tab = 2; }
     if (M.home) {   // the start screen, without the empty document behind it
         if (arrlen(app.tabs) == 1 && !app_tab_modified(0) && !M.open) app_close_tab(0);
         app.home = true; home_prepare();
@@ -800,6 +802,7 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         else if (!strcmp(argv[i], "--demo")) M.demo = true;
         else if (!strncmp(argv[i], "--open=", 7)) M.open = argv[i] + 7;
         else if (!strncmp(argv[i], "--frame=", 8)) M.goto_frame = atoi(argv[i] + 8);
+        else if (!strncmp(argv[i], "--layer=", 8)) M.goto_layer = atoi(argv[i] + 8);
         else if (!strncmp(argv[i], "--cursor-sheet=", 15)) {   // [--cursor-scale=N before it] every cursor, enlarged
             float sc = 1.5f;
             for (int j = 1; j < argc; j++) if (!strncmp(argv[j], "--cursor-scale=", 15)) sc = (float)atof(argv[j] + 15);

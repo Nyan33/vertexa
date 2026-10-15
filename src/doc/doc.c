@@ -12,6 +12,76 @@ void item_free(Item *it) { arrfree(it->pts); arrfree(it->poly); arrfree(it->star
 
 const char *FILTER_NAMES[FX_COUNT] = {"Blur", "Glow", "Drop Shadow", "Adjust Color"};
 
+/* ── eases ── */
+
+const char *EASE_NAMES[EASE_COUNT] = {"None", "Classic", "Quad", "Cubic", "Quart", "Quint", "Sine", "Back", "Circ",
+                                      "Bounce", "Elastic", "Custom"};
+static float ease_in(int e, float t) {   // the "in" form of a family
+    switch (e) {
+    case EASE_QUAD: return t * t;
+    case EASE_CUBIC: return t * t * t;
+    case EASE_QUART: return t * t * t * t;
+    case EASE_QUINT: return t * t * t * t * t;
+    case EASE_SINE: return 1 - cosf(t * VX_PI / 2);
+    case EASE_BACK: { const float c1 = 1.70158f, c3 = c1 + 1; return c3 * t * t * t - c1 * t * t; }
+    case EASE_CIRC: return 1 - sqrtf(MAX(0, 1 - t * t));
+    case EASE_BOUNCE: {
+        float u = 1 - t, b;   // the out bounce, mirrored
+        const float n1 = 7.5625f, d1 = 2.75f;
+        if (u < 1 / d1) b = n1 * u * u;
+        else if (u < 2 / d1) { u -= 1.5f / d1; b = n1 * u * u + 0.75f; }
+        else if (u < 2.5f / d1) { u -= 2.25f / d1; b = n1 * u * u + 0.9375f; }
+        else { u -= 2.625f / d1; b = n1 * u * u + 0.984375f; }
+        return 1 - b;
+    }
+    case EASE_ELASTIC:
+        if (t <= 0 || t >= 1) return t;
+        return -powf(2, 10 * t - 10) * sinf((t * 10 - 10.75f) * (2 * VX_PI / 3));
+    default: return t;
+    }
+}
+static float bez1(float a, float b, float c, float d, float u) { float v = 1 - u; return v * v * v * a + 3 * v * v * u * b + 3 * v * u * u * c + u * u * u * d; }
+static float ease_custom(const Key *k, float t) {
+    int segs = (k->nez - 1) / 3;
+    for (int s = 0; s < segs; s++) {
+        const V2 *p = &k->ez[s * 3];
+        if (t > p[3].x && s + 1 < segs) continue;
+        float lo = 0, hi = 1;   // the curve's x grows with u: find the u where x = t
+        for (int i = 0; i < 30; i++) { float mid = (lo + hi) / 2; if (bez1(p[0].x, p[1].x, p[2].x, p[3].x, mid) < t) lo = mid; else hi = mid; }
+        return bez1(p[0].y, p[1].y, p[2].y, p[3].y, (lo + hi) / 2);
+    }
+    return t;
+}
+float key_ease(const Key *k, float t) {
+    t = clampf(t, 0, 1);
+    switch (k->ease) {
+    case EASE_NONE: return t;
+    case EASE_CLASSIC: { float e = clampf(k->ease_amt / 100, -1, 1); return t + e * t * (1 - t); }   // Flash: out > 0, in < 0
+    case EASE_CUSTOM: return k->nez >= 4 ? ease_custom(k, t) : t;
+    default:
+        if (k->ease_dir == EASE_IN) return ease_in(k->ease, t);
+        if (k->ease_dir == EASE_OUT) return 1 - ease_in(k->ease, 1 - t);
+        return t < 0.5f ? ease_in(k->ease, 2 * t) / 2 : 1 - ease_in(k->ease, 2 - 2 * t) / 2;
+    }
+}
+void key_ease_custom_default(Key *k) {
+    k->nez = 4;
+    k->ez[0] = v2(0, 0); k->ez[1] = v2(0.4f, 0); k->ez[2] = v2(0.6f, 1); k->ez[3] = v2(1, 1);
+}
+bool ease_from_name(const char *m, u8 *ease, u8 *dir) {
+    static const char *fam[] = {"quad", "cubic", "quart", "quint", "sine", "back", "circ", "bounce", "elastic"};
+    if (!m) return false;
+    for (int i = 0; i < COUNT(fam); i++) {
+        size_t n = strlen(fam[i]);
+        if (strncmp(m, fam[i], n)) continue;
+        const char *r = m + n;
+        *ease = (u8)(EASE_QUAD + i);
+        *dir = !strcmp(r, "In") ? EASE_IN : !strcmp(r, "Out") ? EASE_OUT : EASE_INOUT;
+        return true;
+    }
+    return false;
+}
+
 void colorfx_update(ColorFx *c) {
     float t = clampf(c->amount, -1, 1);
     float rgb[3] = {(c->tint & 255) / 255.0f, ((c->tint >> 8) & 255) / 255.0f, ((c->tint >> 16) & 255) / 255.0f};
@@ -118,6 +188,7 @@ Doc *doc_new(void) {
     d->onion_on = false; d->onion_prev = 2; d->onion_next = 1;
     d->next_id = 1;
     d->xp.format = XF_VSLICE; d->xp.scale = 1;
+    d->bg = hex(0xffffff);
     d->scene.len = 24; d->scene.frame = 1;
     Layer l = make_layer(d, LT_VECTOR, "Layer 1");
     arrput(d->scene.layers, l);
@@ -588,9 +659,8 @@ bool doc_camera_at(Doc *d, int frame, float cam[4]) {
     key_cam(d, k, cam);
     if (k->tw == TW_CLASSIC && ki + 1 < arrlen(l->keys) && frame > k->f) {
         Key *n = &l->keys[ki + 1];
-        float b[4], t = (float)(frame - k->f) / (float)(n->f - k->f);
+        float b[4], t = key_ease(k, (float)(frame - k->f) / (float)(n->f - k->f));
         key_cam(d, n, b);
-        t = clampf(t, 0, 1);
         float dr = b[3] - cam[3];
         while (dr > VX_PI) dr -= 2 * VX_PI;
         while (dr < -VX_PI) dr += 2 * VX_PI;
