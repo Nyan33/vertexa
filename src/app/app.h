@@ -10,7 +10,7 @@ typedef struct {
     float size, smoothing;
     Curve curve;
     u8 tip; float angle, aspect; u8 taper;
-    bool user;                    // imported (.sut); kept in %APPDATA%/Vertexa/brushes.txt
+    bool user;                    // the user's (made, duplicated or imported): editable; built-ins are not
 } BrushPreset;
 
 enum { TRIM_TO_INTERSECTION, TRIM_WHOLE };
@@ -46,7 +46,17 @@ bool act_is_default(int a);
 int keys_bind(int a, int slot, KeyChord c);    // returns the action that lost this chord, or -1
 void keys_reset(int a);                     // -1: all
 
-enum { SET_GENERAL, SET_PERFORMANCE, SET_KEYS, SET_THEME, SET_COUNT };
+enum { SET_GENERAL, SET_PERFORMANCE, SET_KEYS, SET_LAYOUT, SET_THEME, SET_COUNT };
+
+// where the window's parts go (Settings > Layout; profiles in %APPDATA%/Vertexa/layouts.txt)
+typedef struct {
+    char name[48];
+    bool panel_left;              // colors and the Brushes / Library / Properties panel on the left
+    bool tools_right;             // the tools column on the right of the stage
+    bool timeline_top;            // the timeline above the stage (Animate's Classic workspace)
+    bool color_below;             // the color wheel under the panel's tabs instead of above them
+    float panel_w, tl_h;
+} Layout;
 
 // an open document (a tab in the title bar)
 typedef struct DocTab {
@@ -86,8 +96,9 @@ typedef struct {
     // playback
     bool playing; double play_t;
     // layout
+    Layout layout;
     int right_tab;
-    float tl_h;
+    float tl_h;                   // the timeline's height (the layout keeps it too)
     // feedback
     char toast[192]; double toast_until;
     bool settings;                // the Settings window is open
@@ -120,11 +131,19 @@ Color app_color(void);
 void app_set_color(Color c);
 void app_apply_preset(int i);
 void app_add_preset(const BrushPreset *p);   // appends a user preset and saves the list
+int app_insert_preset(int at, const BrushPreset *p);   // a user preset at index at; returns it
 void app_remove_preset(int i);
+void app_move_preset(int from, int to);
+void app_presets_save(void);                // %APPDATA%/Vertexa/brushes.txt, the list in its order
+void app_export_preset(int i);              // save dialog, .vxbrush
+void app_brush_name(char *out, int cap, const char *base);   // base, or base 2, 3, ... when taken
 void app_import_brushes(void);
+void brush_new(void);                       // a user brush from the current settings, opened for editing
+bool brush_editing(void);                   // the Brushes tab shows a brush's settings
 void settings_load(void);                   // theme from %APPDATA%/Vertexa/themes.txt
 void settings_window(void);                 // modal Settings window (Edit > Settings, Ctrl+,)
 void settings_open(int page);
+void layout_tick(void);                     // the layout in use is saved once a drag of its edges ends
 void prefs_changed(void);                   // apply and save the preferences
 void recovery_cleanup(void);
 void app_autosave_due(void);                // self-tests: the auto-save and recovery timers fire now                // on a normal exit: this session's recovery copy is not needed
@@ -193,6 +212,7 @@ int select_count(void);
 Item *select_first(void);
 void select_all(void);
 void select_delete(void);
+bool select_recolor(Color c, int target, bool commit);   // the color panel changed (target 0 fill, 1 stroke)
 void select_copy(bool cut);
 void select_paste(bool in_place);
 void select_convert_to_symbol(void);

@@ -149,12 +149,20 @@ static void sync_hsv(void) {
 }
 static void set_from_hsv(void) { Color c = color_from_hsv(app.hue, app.sat, app.val); app_set_color(c); shown_color = c; }
 
+// with vectors selected, a new color goes onto them as it changes (Umoupen); one undo step per drag
+static bool recolor_open;
+static void recolor(void) {
+    if (!strchr("VAQL", app.tool) || app.tool == 0) return;
+    if (select_recolor(col_alpha(app_color(), app.alpha), app.color_target, !recolor_open)) recolor_open = true;
+}
+
 void color_panel(Rect r) {
+    if (!ui.in.down[0]) recolor_open = false;
     sync_hsv();
     dl_rect(ui.dl, rect(r.x, r.y + r.h - 1, r.w, 1), C_LINE);
     Rect in = rect_inset(r, 16, 16);
     V2 c = {roundf(in.x + in.w / 2), in.y + 4 + 102};
-    if (ui_color_wheel(ui_id("wheel"), c, 102, 85, &app.hue, &app.sat, &app.val)) set_from_hsv();
+    if (ui_color_wheel(ui_id("wheel"), c, 102, 85, &app.hue, &app.sat, &app.val)) { set_from_hsv(); recolor(); }
 
     // stroke / fill, hex, alpha
     float y = in.y + 4 + 204 + 16;
@@ -180,12 +188,12 @@ void color_panel(Rect r) {
     if (ui.focus != ui_id("hex")) snprintf(hexbuf, sizeof(hexbuf), "%06X", col_rgb(app_color()));
     if (ui_text_field(ui_id("hex"), rect(in.x + 52, y, in.w - 52 - 82, 30), hexbuf, sizeof(hexbuf), "#")) {
         unsigned v; char *s = hexbuf; if (*s == '#') s++;
-        if (strlen(s) == 3) { char e[7] = {s[0], s[0], s[1], s[1], s[2], s[2], 0}; if (sscanf(e, "%x", &v) == 1) app_set_color(hex(v)); }
-        else if (sscanf(s, "%x", &v) == 1) app_set_color(hex(v));
+        if (strlen(s) == 3) { char e[7] = {s[0], s[0], s[1], s[1], s[2], s[2], 0}; if (sscanf(e, "%x", &v) == 1) { app_set_color(hex(v)); recolor(); } }
+        else if (sscanf(s, "%x", &v) == 1) { app_set_color(hex(v)); recolor(); }
     }
     if (ui.focus != ui_id("alpha")) snprintf(abuf, sizeof(abuf), "%d%%", (int)roundf(app.alpha * 100));
     if (ui_text_field(ui_id("alpha"), rect(in.x + in.w - 74, y, 74, 30), abuf, sizeof(abuf), "A")) {
-        int a; if (sscanf(abuf, "%d", &a) == 1) app.alpha = clampf(a / 100.0f, 0, 1);
+        int a; if (sscanf(abuf, "%d", &a) == 1) { app.alpha = clampf(a / 100.0f, 0, 1); recolor(); }
     }
     // swatches
     y += 30 + 14;
@@ -206,7 +214,7 @@ void color_panel(Rect r) {
             if (on) { dl_circle(ui.dl, wc, 12.5f, C_TX); dl_circle(ui.dl, wc, 11, C_S1); }
             dl_circle(ui.dl, wc, 10, app.swatches[i]);
             dl_circle_border(ui.dl, wc, 10, 1, hexa(0xffffff, 0x18));
-            if (a.clicked) app_set_color(app.swatches[i]);
+            if (a.clicked) { app_set_color(app.swatches[i]); recolor(); }
             if (a.right) { memmove(&app.swatches[i], &app.swatches[i + 1], sizeof(Color) * (app.nswatches - i - 1)); app.nswatches--; }
         }
         sx += 27;
@@ -299,54 +307,228 @@ static void curve_editor(Rect r) {
     font_draw(ui.dl, F_MONO, g.x + 2, g.y + g.h - 3, "pressure", hexa(0xffffff, 0x40));
 }
 
+// the brush list: a click picks a brush, Ctrl / Shift pick several, dragging a row moves it. Each row
+// has Duplicate and Edit (built-ins can't be edited: they are duplicated first). Edit swaps the list
+// for the brush's settings
+static int B_EDIT = -1;     // the brush whose settings are open, -1 = the list
+static int *B_DEL;          // brushes waiting for the delete confirmation
+
+static bool small_icon(UiId id, Rect b, IconId ic, bool enabled, const char *tip) {
+    UiResp re = ui_interact(id, b);
+    if (re.hover && enabled) dl_rrect(ui.dl, b, 6, C_S3);
+    icon_draw(ui.dl, ic, v2(b.x + b.w / 2, b.y + b.h / 2), ICON_S, false, !enabled ? col_a(C_TX3, 0x50) : re.hover ? C_TX : C_TX3);
+    ui_tooltip(id, b, tip);
+    return enabled && re.clicked;
+}
+
+static void brush_duplicate(int i) {
+    BrushPreset p = app.presets[i];
+    char base[48];
+    snprintf(base, sizeof(base), "%.42s copy", p.name);
+    app_brush_name(p.name, sizeof(p.name), base);
+    app_apply_preset(app_insert_preset(i + 1, &p));
+}
+
+void brush_new(void) {   // the brush in use as it is now, at the end of the list, opened for editing
+    BrushPreset p = {0};
+    app_brush_name(p.name, sizeof(p.name), "New Brush");
+    p.size = app.brush_size; p.smoothing = app.brush_smooth; p.curve = app.curve;
+    p.tip = app.tip; p.angle = app.tip_angle; p.aspect = app.tip_aspect; p.taper = app.taper;
+    int at = app_insert_preset((int)arrlen(app.presets), &p);
+    app_apply_preset(at);
+    app.right_tab = 0;
+    B_EDIT = at;
+}
+bool brush_editing(void) { return B_EDIT >= 0; }
+
+static void ask_delete(const int *idx, int n, Rect at) {
+    arrsetlen(B_DEL, 0);
+    for (int k = 0; k < n; k++) if (idx[k] >= 0 && idx[k] < arrlen(app.presets) && app.presets[idx[k]].user) arrput(B_DEL, idx[k]);
+    if (arrlen(B_DEL)) ui_open_popup(ui_id("preset-delete"), at);
+}
+static void delete_popup(void) {
+    if (!ui_popup_begin(ui_id("preset-delete"), rect(ui.popup_anchor.x, ui.popup_anchor.y, 250, 10 + 24 + 9 + 28 * 2))) return;
+    int n = (int)arrlen(B_DEL);
+    char t[96];
+    if (n == 1 && B_DEL[0] < arrlen(app.presets)) snprintf(t, sizeof(t), "Delete \"%s\"?", app.presets[B_DEL[0]].name);
+    else snprintf(t, sizeof(t), "Delete %d brushes?", n);
+    ui_menu_header(t);
+    ui_menu_sep();
+    if (ui_menu_item_ic(IC_TRASH, n == 1 ? "Delete Brush" : "Delete Brushes", NULL, true, false)) {
+        for (int q = (int)arrlen(app.presets) - 1; q >= 0; q--) {   // highest first, so the other indices stay right
+            bool want = false;
+            for (int k = 0; k < n; k++) want |= B_DEL[k] == q;
+            if (!want) continue;
+            if (B_EDIT == q) B_EDIT = -1;
+            else if (B_EDIT > q) B_EDIT--;
+            app_remove_preset(q);
+        }
+        arrsetlen(B_DEL, 0);
+    }
+    if (ui_menu_item("Cancel", NULL, true, false)) arrsetlen(B_DEL, 0);
+    ui_popup_end();
+}
+
+static void tip_settings(float x, float w, float *py) {
+    float y = *py;
+    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Tip", C_TX3); y += 22;
+    static const char *tips[] = {"Round", "Oval", "Square"};
+    u8 tip = (u8)ui_segmented(ui_id("tip"), rect(x, y, w, 30), tips, 3, app.tip); y += 30;
+    if (tip == TIP_OVAL && app.tip != TIP_OVAL && app.tip_aspect > 0.95f) app.tip_aspect = 0.38f;
+    app.tip = tip;
+    if (app.tip != TIP_ROUND) {
+        y += 12;
+        font_draw_in(ui.dl, F_UI, rect(x, y, 60, 20), ALIGN_LEFT, "Angle", C_TX3);
+        app.tip_angle = roundf(ui_slider(ui_id("tip-angle"), rect(x + 80, y, w - 80 - 48, 20), app.tip_angle, 0, 180));
+        char s[16]; snprintf(s, sizeof(s), "%d\xC2\xB0", (int)app.tip_angle);
+        font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, y, 44, 20), ALIGN_RIGHT, s, C_TX);
+        y += 20;
+        if (app.tip == TIP_OVAL) {
+            y += 8;
+            font_draw_in(ui.dl, F_UI, rect(x, y, 76, 20), ALIGN_LEFT, "Roundness", C_TX3);
+            float pc = roundf(ui_slider(ui_id("tip-aspect"), rect(x + 80, y, w - 80 - 48, 20), app.tip_aspect * 100, 5, 100));
+            app.tip_aspect = pc / 100;
+            char a[16]; snprintf(a, sizeof(a), "%d%%", (int)pc);
+            font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, y, 44, 20), ALIGN_RIGHT, a, C_TX);
+            y += 20;
+        }
+    }
+    y += 16;
+    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Taper", C_TX3); y += 22;
+    static const char *tapers[] = {"None", "Start", "End", "Both"};
+    app.taper = (u8)ui_segmented(ui_id("taper"), rect(x, y, w, 30), tapers, 4, app.taper); y += 30;
+    *py = y;
+}
+
+static void slider_row(const char *id, const char *label, float x, float w, float *y, float *v, float lo, float hi, const char *fmt) {
+    font_draw_in(ui.dl, F_UI, rect(x, *y, 76, 20), ALIGN_LEFT, label, C_TX3);
+    *v = roundf(ui_slider(ui_id(id), rect(x + 80, *y, w - 80 - 48, 20), *v, lo, hi));
+    char s[16]; snprintf(s, sizeof(s), fmt, (int)*v);
+    font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 44, *y, 44, 20), ALIGN_RIGHT, s, C_TX);
+    *y += 20;
+}
+
+// the settings of one of the user's brushes: they are the brush in use while open, and every change is
+// kept in the brush (saved once the mouse is let go)
+static void brush_editor(Rect r) {
+    int i = B_EDIT;
+    BrushPreset *p = &app.presets[i];
+    static float scroll, content;
+    static bool dirty;
+    if (rect_has(r, ui.in.mouse) && ui_mouse_free() && ui.in.wheel_y != 0) scroll -= ui.in.wheel_y * 40;
+    scroll = clampf(scroll, 0, MAX(0, content - r.h));
+    float x = r.x + 16, w = r.w - 32, y = r.y + 12 - scroll;
+
+    // back, name, export
+    if (small_icon(ui_id("brush-back"), rect(x - 6, y, 30, 30), IC_BACK, true, "Back to the brushes") ||
+        (ui.in.key_pressed[SAPP_KEYCODE_ESCAPE] && !ui.focus && !ui.popup)) { B_EDIT = -1; scroll = 0; return; }
+    static char name[48];
+    UiId nid = ui_id("brush-name");
+    if (ui.focus != nid) snprintf(name, sizeof(name), "%s", p->name);
+    if (ui_text_field(nid, rect(x + 30, y, w - 30 - 36, 30), name, sizeof(name), NULL)) {
+        for (char *c = name; *c; c++) if (*c == '\t' || *c == '\n' || *c == '\r') *c = ' ';
+        if (name[0] && strcmp(name, p->name)) {
+            p->name[0] = 0;   // not in the way of its own new name
+            app_brush_name(p->name, sizeof(p->name), name);
+            app_presets_save();
+        }
+    }
+    if (small_icon(ui_id("brush-export"), rect(x + w - 30, y, 30, 30), IC_EXPORT, true, "Export this brush (.vxbrush)")) app_export_preset(i);
+    y += 30 + 14;
+
+    // a stroke with it, light, heavy, light
+    Rect pv = {x, y, w, 56};
+    dl_rrect(ui.dl, pv, 8, C_S2);
+    BrushPreset big = *p;
+    big.size *= 2;   // the list's ribbons are small; here the size shows
+    ribbon(rect_inset(pv, 12, 4), &big, C_TX);
+    y += 56 + 16;
+
+    slider_row("brush-size", "Size", x, w, &y, &app.brush_size, 1, 100, "%d");
+    y += 10;
+    slider_row("brush-smooth", "Smoothing", x, w, &y, &app.brush_smooth, 0, 100, "%d");
+    y += 16;
+    tip_settings(x, w, &y);
+    y += 16;
+    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Pressure \xE2\x86\x92 size", C_TX3); y += 22;
+    curve_editor(rect(x, y, w, 104));
+    y += 104 + 20;
+
+    Rect del = {x, y, w, 30};
+    UiId did = ui_id("brush-delete");
+    UiResp dre = ui_interact(did, del);
+    dl_rrect_border(ui.dl, del, 7, 1, dre.hover ? C_LINE2 : C_LINE);
+    if (dre.hover) dl_rrect(ui.dl, rect_inset(del, 1, 1), 6, C_S2);
+    float tw = font_width(F_UI, "Delete Brush");
+    icon_draw(ui.dl, IC_TRASH, v2(del.x + del.w / 2 - tw / 2 - 6, del.y + 15), ICON_S, false, dre.hover ? C_TX : C_TX3);
+    font_draw_in(ui.dl, F_UI, rect(del.x + del.w / 2 - tw / 2 + 6, del.y, tw + 4, del.h), ALIGN_LEFT, "Delete Brush", dre.hover ? C_TX : C_TX2);
+    if (dre.clicked) ask_delete(&i, 1, rect(del.x, del.y + del.h + 4, del.w, 1));
+    y += 30 + 16;
+    content = y + scroll - r.y;
+    if (content > r.h) {
+        float th = r.h * r.h / content, ty = r.y + (r.h - th) * scroll / (content - r.h);
+        dl_rrect(ui.dl, rect(r.x + r.w - 5, ty, 3, th), 1.5f, hexa(0xffffff, 0x22));
+    }
+
+    // what the controls (and the context bar) changed goes into the brush
+    if (B_EDIT != i) return;
+    BrushPreset q = *p;
+    q.size = app.brush_size; q.smoothing = app.brush_smooth; q.curve = app.curve;
+    q.tip = app.tip; q.angle = app.tip_angle; q.aspect = app.tip_aspect; q.taper = app.taper;
+    if (memcmp(&q, p, sizeof(q))) { *p = q; dirty = true; }
+    if (dirty && !ui.in.down[0]) { app_presets_save(); dirty = false; }
+}
+
 static void brushes_tab(Rect r) {
-    // preset list: scrolls once it outgrows six rows
-    static float scroll;
     int n = (int)arrlen(app.presets);
-    float list_h = MIN(n, 6) * 36.0f + 2, content = n * 36.0f + 2;
-    Rect list = {r.x, r.y + 6, r.w, list_h};
+    if (B_EDIT >= n || (B_EDIT >= 0 && (!app.presets[B_EDIT].user || app.preset != B_EDIT))) B_EDIT = -1;   // another brush was picked (an import)
+    if (B_EDIT >= 0) { brush_editor(r); delete_popup(); return; }
+
+    static float scroll;
+    float list_h = r.h - 8, content = n * 36.0f + 4;
+    Rect list = {r.x, r.y + 4, r.w, list_h};
     if (rect_has(list, ui.in.mouse) && ui_mouse_free() && ui.in.wheel_y != 0) scroll -= ui.in.wheel_y * 36;
     static int shown = -1;   // keep a newly chosen preset (e.g. just imported) in view
     if (app.preset != shown) {
         float py = app.preset * 36.0f;
         if (py < scroll) scroll = py;
-        if (py + 38 > scroll + list_h) scroll = py + 38 - list_h;
+        if (py + 40 > scroll + list_h) scroll = py + 40 - list_h;
         shown = app.preset;
     }
+    static int press = -1, drag = -1;   // the row pressed; the row being moved once the mouse goes 5 px
+    static float press_y;
+    if (drag >= 0) {   // near the edges the list scrolls by itself
+        if (ui.in.mouse.y < list.y + 24) scroll -= 6;
+        if (ui.in.mouse.y > list.y + list.h - 24) scroll += 6;
+    }
     scroll = clampf(scroll, 0, MAX(0, content - list_h));
+    float top = list.y + 2 - scroll;
     dl_push_clip(ui.dl, list);
-    float y = list.y + 2 - scroll;
-    int remove = -1;
-    static int *PICK;   // presets picked with Ctrl / Shift (to delete several imported brushes at once)
+    static int *PICK;   // brushes picked with Ctrl / Shift (to delete several at once)
     for (ptrdiff_t k = arrlen(PICK) - 1; k >= 0; k--) if (PICK[k] >= n) arrdel(PICK, k);
-    for (int i = 0; i < n; i++, y += 36) {
-        Rect row = {r.x + 8, y, r.w - 16, 34};
+    for (int i = 0; i < n; i++) {
+        Rect row = {r.x + 8, top + i * 36.0f, r.w - 16, 34};
         if (row.y + row.h < list.y || row.y > list.y + list.h) continue;
         BrushPreset *p = &app.presets[i];
-        UiId id = ui_idi("preset", i);
-        // the trash button first, so the row doesn't take its click
-        bool del = p->user && rect_has(row, ui.in.mouse) && ui_mouse_free();
-        Rect x = {row.x + row.w - 30, row.y + 5, 24, 24};
-        UiId xid = ui_idi("preset-del", i);
-        UiResp xr = del ? ui_interact(xid, x) : (UiResp){0};
-        UiResp re = xr.hover ? (UiResp){0} : ui_interact(id, row);
+        // the row buttons first, so the row doesn't take their clicks
+        Rect eb = {row.x + row.w - 28, row.y + 5, 24, 24}, cb = {eb.x - 26, eb.y, 24, 24};
+        bool over = drag < 0 && rect_has(row, ui.in.mouse) && ui_mouse_free();
+        bool on_btn = over && (rect_has(eb, ui.in.mouse) || rect_has(cb, ui.in.mouse));
+        UiResp re = on_btn ? (UiResp){0} : ui_interact(ui_idi("preset", i), row);
         bool on = app.preset == i, picked = false;
         for (ptrdiff_t k = 0; k < arrlen(PICK); k++) picked |= PICK[k] == i;
-        if (on) { dl_rrect(ui.dl, row, 7, C_AC2); dl_rrect_border(ui.dl, row, 7, 1, C_AC3); }
+        if (drag == i) dl_rrect(ui.dl, row, 7, C_S3);
+        else if (on) { dl_rrect(ui.dl, row, 7, C_AC2); dl_rrect_border(ui.dl, row, 7, 1, C_AC3); }
         else if (picked) { dl_rrect(ui.dl, row, 7, C_S3); dl_rrect_border(ui.dl, row, 7, 1, C_AC3); }
-        else if (re.hover) dl_rrect(ui.dl, row, 7, C_S2);
-        Color tc = on || picked || re.hover ? C_TX : C_TX2;
-        float nx = row.x + 10;
-        if (p->user) { icon_draw(ui.dl, IC_IMPORT, v2(nx + 6, row.y + 17), ICON_S, false, C_TX3); nx += 18; }
-        font_draw_in(ui.dl, F_UI, rect(nx, row.y, row.x + row.w - 140 - nx, row.h), ALIGN_LEFT, p->name, tc);
-        Rect rib = rect(row.x + row.w - 136, row.y + 7, 128, 20);
-        if (del) rib.w -= 28;
-        ribbon(rib, p, tc);
-        if (del) {
-            if (xr.hover) dl_rrect(ui.dl, x, 6, C_S3);
-            icon_draw(ui.dl, IC_TRASH, v2(x.x + 12, x.y + 12), ICON_S, false, xr.hover ? C_TX : C_TX3);
-            ui_tooltip(xid, x, "Remove imported brush");
-            if (xr.clicked) { remove = i; continue; }
+        else if (re.hover || over) dl_rrect(ui.dl, row, 7, C_S2);
+        Color tc = on || picked || over || drag == i ? C_TX : C_TX2;
+        font_draw_in(ui.dl, F_UI, rect(row.x + 10, row.y, row.w - 10 - 158, row.h), ALIGN_LEFT, p->name, tc);
+        ribbon(rect(cb.x - 98, row.y + 7, 92, 20), p, tc);
+        if (small_icon(ui_idi("preset-dup", i), cb, IC_COPY, true, "Duplicate")) brush_duplicate(i);
+        if (small_icon(ui_idi("preset-edit", i), eb, IC_EDIT, p->user,
+                       p->user ? "Edit brush" : "Built-in brushes can't be changed: duplicate it and edit the copy")) {
+            app_apply_preset(i);
+            B_EDIT = i;
         }
         if (re.pressed) {
             u32 mods = ui.in.mods;
@@ -358,71 +540,46 @@ static void brushes_tab(Rect r) {
             } else if (mods & MOD_SHIFT) {   // a run, from the current one
                 arrsetlen(PICK, 0);
                 for (int q = MIN(app.preset, i); q <= MAX(app.preset, i); q++) arrput(PICK, q);
-            } else { arrsetlen(PICK, 0); app_apply_preset(i); }
+            } else { arrsetlen(PICK, 0); app_apply_preset(i); press = i; press_y = ui.in.mouse.y; }
         }
+        if (re.dbl && p->user) B_EDIT = i;
         if (re.right) {
             if (!picked) { arrsetlen(PICK, 0); arrput(PICK, i); }
             ui_open_popup(ui_id("preset-menu"), rect(ui.in.mouse.x, ui.in.mouse.y, 1, 1));
         }
     }
+    // moving a row: where it would land
+    int slot = CLAMP((int)floorf((ui.in.mouse.y - top) / 36 + 0.5f), 0, n);
+    if (press >= 0 && ui.in.down[0] && drag < 0 && fabsf(ui.in.mouse.y - press_y) > 5) drag = press;
+    if (drag >= 0) {
+        ui_cursor(SAPP_MOUSECURSOR_RESIZE_NS);
+        if (slot != drag && slot != drag + 1) dl_rrect(ui.dl, rect(r.x + 10, top + slot * 36.0f - 2, r.w - 20, 2), 1, C_AC);
+    }
+    if (!ui.in.down[0]) {
+        if (drag >= 0 && slot != drag && slot != drag + 1) { app_move_preset(drag, slot > drag ? slot - 1 : slot); arrsetlen(PICK, 0); shown = app.preset; }
+        press = drag = -1;
+    }
     dl_pop_clip(ui.dl);
-    if (remove >= 0) app_remove_preset(remove);
-    if (ui_popup_begin(ui_id("preset-menu"), rect(ui.popup_anchor.x, ui.popup_anchor.y, 240, 10 + 28 * 2 + 9))) {
-        int users = 0;
+
+    if (ui_popup_begin(ui_id("preset-menu"), rect(ui.popup_anchor.x, ui.popup_anchor.y, 240, 10 + 28 * 5 + 9 * 2))) {
+        int one = arrlen(PICK) == 1 ? PICK[0] : -1, users = 0;
         for (ptrdiff_t k = 0; k < arrlen(PICK); k++) users += PICK[k] < n && app.presets[PICK[k]].user;
-        if (ui_menu_item("Use This Brush", NULL, arrlen(PICK) == 1, false)) { app_apply_preset(PICK[0]); arrsetlen(PICK, 0); }
+        if (ui_menu_item("Use This Brush", NULL, one >= 0, false)) app_apply_preset(one);
+        if (ui_menu_item("Duplicate", NULL, one >= 0, false)) brush_duplicate(one);
+        if (ui_menu_item("Edit Brush", NULL, one >= 0 && app.presets[one].user, false)) { app_apply_preset(one); B_EDIT = one; }
+        ui_menu_sep();
+        if (ui_menu_item("Export", NULL, one >= 0, false)) app_export_preset(one);
         ui_menu_sep();
         char del[64];
-        snprintf(del, sizeof(del), users > 1 ? "Remove %d Imported Brushes" : "Remove Imported Brush", users);
-        if (ui_menu_item(del, NULL, users > 0, false)) {
-            // highest first, so the other indices stay right
-            for (int q = n - 1; q >= 0; q--) {
-                bool want = false;
-                for (ptrdiff_t k = 0; k < arrlen(PICK); k++) want |= PICK[k] == q;
-                if (want && app.presets[q].user) app_remove_preset(q);
-            }
-            arrsetlen(PICK, 0);
-        }
+        snprintf(del, sizeof(del), users > 1 ? "Delete %d Brushes" : "Delete Brush", users);
+        if (ui_menu_item(del, NULL, users > 0, false)) { ask_delete(PICK, (int)arrlen(PICK), rect(ui.popup_anchor.x, ui.popup_anchor.y, 1, 1)); arrsetlen(PICK, 0); }
         ui_popup_end();
     }
+    delete_popup();
     if (content > list_h) {   // thin scroll thumb
         float th = list_h * list_h / content, ty = list.y + (list_h - th) * scroll / (content - list_h);
         dl_rrect(ui.dl, rect(r.x + r.w - 5, ty, 3, th), 1.5f, hexa(0xffffff, 0x22));
     }
-    y = list.y + list_h + 2;
-    y += 6;
-    dl_rect(ui.dl, rect(r.x, y, r.w, 1), C_LINE);
-    float x = r.x + 16, w = r.w - 32;
-    y += 14;
-    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Tip", C_TX3); y += 22;
-    static const char *tips[] = {"Round", "Oval", "Square"};
-    u8 tip = (u8)ui_segmented(ui_id("tip"), rect(x, y, w, 30), tips, 3, app.tip); y += 30;
-    if (tip == TIP_OVAL && app.tip != TIP_OVAL && app.tip_aspect > 0.95f) app.tip_aspect = 0.38f;
-    app.tip = tip;
-    if (app.tip != TIP_ROUND) {
-        y += 12;
-        font_draw_in(ui.dl, F_UI, rect(x, y, 60, 20), ALIGN_LEFT, "Angle", C_TX3);
-        app.tip_angle = roundf(ui_slider(ui_id("tip-angle"), rect(x + 72, y, w - 72 - 44, 20), app.tip_angle, 0, 180));
-        char s[16]; snprintf(s, sizeof(s), "%d\xC2\xB0", (int)app.tip_angle);
-        font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 40, y, 40, 20), ALIGN_RIGHT, s, C_TX);
-        y += 20;
-        if (app.tip == TIP_OVAL) {
-            y += 8;
-            font_draw_in(ui.dl, F_UI, rect(x, y, 70, 20), ALIGN_LEFT, "Roundness", C_TX3);
-            float pc = roundf(ui_slider(ui_id("tip-aspect"), rect(x + 72, y, w - 72 - 44, 20), app.tip_aspect * 100, 5, 100));
-            app.tip_aspect = pc / 100;
-            char a[16]; snprintf(a, sizeof(a), "%d%%", (int)pc);
-            font_draw_in(ui.dl, F_MONO_MED, rect(x + w - 40, y, 40, 20), ALIGN_RIGHT, a, C_TX);
-            y += 20;
-        }
-    }
-    y += 14;
-    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Taper", C_TX3); y += 22;
-    static const char *tapers[] = {"None", "Start", "End", "Both"};
-    app.taper = (u8)ui_segmented(ui_id("taper"), rect(x, y, w, 30), tapers, 4, app.taper); y += 30;
-    y += 14;
-    font_draw_in(ui.dl, F_UI, rect(x, y, w, 16), ALIGN_LEFT, "Pressure \xE2\x86\x92 size", C_TX3); y += 22;
-    curve_editor(rect(x, y, w, 104));
 }
 
 static int lib_drag = 0;   // being dragged to the stage: a symbol id, or minus a bitmap id
@@ -973,14 +1130,20 @@ void right_panel(Rect r) {
         if (re.clicked) app.right_tab = i;
         x += w + 2;
     }
-    if (app.right_tab == 0) {
-        Rect b = {tb.x + tb.w - 38, tb.y + 6, 28, 28};
-        UiId id = ui_id("import-sut");
-        UiResp re = ui_interact(id, b);
-        if (re.hover) dl_rrect(ui.dl, b, 7, C_S2);
-        icon_draw(ui.dl, IC_IMPORT, v2(b.x + 14, b.y + 14), ICON_M, false, re.hover ? C_TX : C_TX2);
-        ui_tooltip(id, b, "Import Clip Studio brush (.sut)");
-        if (re.clicked) app_import_brushes();
+    if (app.right_tab == 0 && !brush_editing()) {   // new brush, import
+        static const struct { const char *id, *tip; IconId ic; } B[] = {
+            {"brush-new", "New brush from the current settings", IC_PLUS},
+            {"import-sut", "Import brushes (.vxbrush, Clip Studio .sut)", IC_IMPORT},
+        };
+        for (int i = 0; i < 2; i++) {
+            Rect b = {tb.x + tb.w - 38 - (1 - i) * 30, tb.y + 6, 28, 28};
+            UiId id = ui_id(B[i].id);
+            UiResp re = ui_interact(id, b);
+            if (re.hover) dl_rrect(ui.dl, b, 7, C_S2);
+            icon_draw(ui.dl, B[i].ic, v2(b.x + 14, b.y + 14), ICON_M, false, re.hover ? C_TX : C_TX2);
+            ui_tooltip(id, b, B[i].tip);
+            if (re.clicked) { if (i == 0) brush_new(); else app_import_brushes(); }
+        }
     }
     dl_push_clip(ui.dl, r);
     if (app.right_tab == 0) brushes_tab(r);

@@ -10,14 +10,19 @@ interface drawn entirely on the GPU. Documents use a new format (`.vxa`). Window
 - Settings: auto-save and recovery copies, undo steps, interface size, graphics card choice, stage
   anti-aliasing and resolution, rebindable shortcuts, a theme color editor with presets.
 - A custom cursor set: an arrow shaped like the V of the logo, macOS-style hands, tool cursors.
+- Layout profiles: the panel and the tools on either side, the timeline above or below the stage, the
+  color wheel above or below the tabs, panel width; built-in profiles and your own.
 
 **Drawing**
 - A Flash-style vector brush: stabilizer, pressure curve with editable points, tilt, tapers, three tip shapes.
+- Your own brushes: duplicate any brush, edit its name, size, smoothing, tip, taper and pressure curve,
+  reorder the list by dragging, export and import them (`.vxbrush`).
 - Clip Studio Paint brush import (`.sut`).
 - Trim Edge (`C`): cuts a stroke back to the nearest intersections with a click or a drag.
 - Umoupen-style selection: the vector itself is picked, whole or just the piece between intersections;
   the box and the lasso cut strokes.
 - Free Transform with a movable transformation point, Subselection of nodes.
+- With vectors selected, the color wheel, hex field and swatches recolor them as the color changes.
 
 **Animation**
 - Shape tweens between any two drawings, classic tweens.

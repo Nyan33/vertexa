@@ -61,6 +61,11 @@ typedef enum {
     IC_KEYBOARD,
     IC_PALETTE,
     IC_SEARCH,
+    IC_LAYOUT,
+    IC_COPY,
+    IC_EDIT,
+    IC_BACK,
+    IC_GRIP,
     IC_COUNT
 } IconId;
 
@@ -124,4 +129,9 @@ static const int ICON_CODEPOINTS[IC_COUNT] = {
     0xe2d8,  // keyboard
     0xe6c8,  // palette
     0xe30c,  // magnifying-glass
+    0xe6d6,  // layout
+    0xe1cc,  // copy-simple
+    0xebc6,  // pencil-simple-line
+    0xe058,  // arrow-left
+    0xeae2,  // dots-six-vertical
 };

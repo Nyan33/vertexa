@@ -32,7 +32,9 @@ ICONS = [
     ("EXPORT", "export"), ("IMPORT", "download-simple"), ("ENTER", "sign-in"), ("BREAK", "intersect"),
     # settings
     ("SLIDERS", "sliders-horizontal"), ("CPU", "cpu"), ("KEYBOARD", "keyboard"), ("PALETTE", "palette"),
-    ("SEARCH", "magnifying-glass"),
+    ("SEARCH", "magnifying-glass"), ("LAYOUT", "layout"),
+    # brushes
+    ("COPY", "copy-simple"), ("EDIT", "pencil-simple-line"), ("BACK", "arrow-left"), ("GRIP", "dots-six-vertical"),
 ]
 
 

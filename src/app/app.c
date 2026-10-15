@@ -19,21 +19,26 @@ static const BrushPreset BUILTIN[] = {
 };
 #undef C3
 
-/* user presets: one tab-separated line per brush */
+/* brushes: %APPDATA%/Vertexa/brushes.txt keeps the whole list in order. A built-in is a line "@Name",
+   the user's brushes are one tab-separated line each; an exported brush (.vxbrush) is the same line */
 
-// one line per brush: name<TAB>size smoothing tip angle aspect taper | x,y x,y ... (the pressure curve)
-static void presets_save(void) {
+static void preset_line(FILE *f, const BrushPreset *p) {
+    fprintf(f, "%s\t%g %g %d %g %g %d |", p->name, p->size, p->smoothing, p->tip, p->angle, p->aspect, p->taper);
+    for (int k = 0; k < p->curve.n; k++) fprintf(f, " %g,%g", p->curve.x[k], p->curve.y[k]);
+    fprintf(f, "\n");
+}
+#define PRESET_HEADER "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y\n"
+
+void app_presets_save(void) {
     char path[1024];
     if (!plat_config_path("brushes.txt", path, sizeof(path))) return;
     FILE *f = plat_fopen(path, "wb");
     if (!f) return;
-    fprintf(f, "# Vertexa brushes: name<TAB>size smoothing tip angle aspect taper | pressure curve points x,y\n");
+    fprintf(f, PRESET_HEADER "# @Name: a built-in brush, in its place in the list\n");
     for (ptrdiff_t i = 0; i < arrlen(app.presets); i++) {
         BrushPreset *p = &app.presets[i];
-        if (!p->user) continue;
-        fprintf(f, "%s\t%g %g %d %g %g %d |", p->name, p->size, p->smoothing, p->tip, p->angle, p->aspect, p->taper);
-        for (int k = 0; k < p->curve.n; k++) fprintf(f, " %g,%g", p->curve.x[k], p->curve.y[k]);
-        fprintf(f, "\n");
+        if (p->user) preset_line(f, p);
+        else fprintf(f, "@%s\n", p->name);
     }
     fclose(f);
 }
@@ -70,33 +75,105 @@ static bool parse_preset(char *line, BrushPreset *p) {
 }
 
 static void presets_load(void) {
-    for (int i = 0; i < COUNT(BUILTIN); i++) arrput(app.presets, BUILTIN[i]);
+    bool placed[COUNT(BUILTIN)] = {0}, any = false;
     char path[1024];
-    if (!plat_config_path("brushes.txt", path, sizeof(path))) return;
-    FILE *f = plat_fopen(path, "rb");
-    if (!f) return;
+    FILE *f = plat_config_path("brushes.txt", path, sizeof(path)) ? plat_fopen(path, "rb") : NULL;
     char line[1024];
-    while (fgets(line, sizeof(line), f)) {
+    while (f && fgets(line, sizeof(line), f)) {
+        if (line[0] == '@') {
+            line[strcspn(line, "\r\n")] = 0;
+            for (int i = 0; i < COUNT(BUILTIN); i++)
+                if (!placed[i] && !strcmp(line + 1, BUILTIN[i].name)) { arrput(app.presets, BUILTIN[i]); placed[i] = any = true; }
+            continue;
+        }
         BrushPreset p;
         if (line[0] != '#' && parse_preset(line, &p)) arrput(app.presets, p);
     }
-    fclose(f);
+    if (f) fclose(f);
+    // files from before the list had an order: the built-ins first; a built-in a newer version added: last
+    for (int i = COUNT(BUILTIN) - 1; i >= 0 && !any; i--) arrins(app.presets, 0, BUILTIN[i]);
+    for (int i = 0; i < COUNT(BUILTIN) && any; i++) if (!placed[i]) arrput(app.presets, BUILTIN[i]);
 }
 
-void app_add_preset(const BrushPreset *p) {
+static bool name_taken(const char *s) {
+    for (ptrdiff_t i = 0; i < arrlen(app.presets); i++) if (!strcmp(app.presets[i].name, s)) return true;
+    return false;
+}
+void app_brush_name(char *out, int cap, const char *base) {   // base, or "base 2", "base 3", ... if taken
+    snprintf(out, (size_t)cap, "%s", base);
+    for (int n = 2; name_taken(out) && n < 1000; n++) snprintf(out, (size_t)cap, "%.40s %d", base, n);
+}
+
+int app_insert_preset(int at, const BrushPreset *p) {
     BrushPreset q = *p;
     q.user = true;
     for (char *c = q.name; *c; c++) if (*c == '\t' || *c == '\n' || *c == '\r') *c = ' ';
-    arrput(app.presets, q);
-    presets_save();
+    if (!q.name[0]) snprintf(q.name, sizeof(q.name), "Brush");
+    at = CLAMP(at, 0, (int)arrlen(app.presets));
+    arrins(app.presets, at, q);
+    if (app.preset >= at) app.preset++;
+    app_presets_save();
+    return at;
 }
+void app_add_preset(const BrushPreset *p) { app_insert_preset((int)arrlen(app.presets), p); }
 
 void app_remove_preset(int i) {
     if (i < 0 || i >= arrlen(app.presets) || !app.presets[i].user) return;
     arrdel(app.presets, i);
-    if (app.preset == i) app_apply_preset(0);
+    if (app.preset == i) app_apply_preset(MIN(i, (int)arrlen(app.presets) - 1));
     else if (app.preset > i) app.preset--;
-    presets_save();
+    app_presets_save();
+}
+
+void app_move_preset(int from, int to) {   // to: the index it ends up at
+    int n = (int)arrlen(app.presets);
+    if (from < 0 || from >= n) return;
+    to = CLAMP(to, 0, n - 1);
+    if (to == from) return;
+    BrushPreset p = app.presets[from];
+    arrdel(app.presets, from);
+    arrins(app.presets, to, p);
+    if (app.preset == from) app.preset = to;
+    else if (from < app.preset && to >= app.preset) app.preset--;
+    else if (from > app.preset && to <= app.preset) app.preset++;
+    app_presets_save();
+}
+
+void app_export_preset(int i) {
+    if (i < 0 || i >= arrlen(app.presets)) return;
+    char path[512];
+    if (!plat_save_dialog(path, sizeof(path), "Vertexa brush", "vxbrush", app.presets[i].name)) return;
+    FILE *f = plat_fopen(path, "wb");
+    if (!f) { app_toast("Couldn't write the brush file"); return; }
+    fprintf(f, PRESET_HEADER);
+    preset_line(f, &app.presets[i]);
+    fclose(f);
+    app_toast("Exported %s", app.presets[i].name);
+}
+
+static bool import_vxbrush(const char *path) {
+    FILE *f = plat_fopen(path, "rb");
+    if (!f) { app_toast("Couldn't open the brush file"); return false; }
+    char line[1024];
+    int first = -1, n = 0;
+    while (fgets(line, sizeof(line), f)) {
+        BrushPreset p;
+        if (line[0] == '#' || !parse_preset(line, &p)) continue;
+        char name[48];
+        app_brush_name(name, sizeof(name), p.name);
+        memcpy(p.name, name, sizeof(name));
+        int at = app_insert_preset((int)arrlen(app.presets), &p);
+        if (first < 0) first = at;
+        n++;
+    }
+    fclose(f);
+    if (!n) { app_toast("No brushes in this file"); return false; }
+    app_apply_preset(first);
+    app.right_tab = 0;
+    if (!app_tool_paints(app.tool) || app.tool == 'E') app.tool = 'B';
+    if (n > 1) app_toast("Imported %d brushes", n);
+    else app_toast("Imported %s", app.presets[first].name);
+    return true;
 }
 
 static const struct { char k; const char *name; bool grp; IconId icon; bool fill; int act; } TOOLS[] = {
@@ -139,7 +216,6 @@ void app_init(void) {
     app.fill = hex(0x141414); app.stroke = hex(0x141414); app.alpha = 1;
     static const u32 sw[] = {0x141414, 0xffffff, 0xffd2ad, 0xf7a07c, 0xff6f5e, 0xc2304a, 0xffb347, 0xffe066, 0x3ddc97, 0x1b998b, 0x46c2ff, 0x2f6fdb, 0x8b7bff, 0x2b2f5c, 0x7d8590};
     for (int i = 0; i < COUNT(sw); i++) app.swatches[app.nswatches++] = hex(sw[i]);
-    app.tl_h = M_TL_H;
     app.shape_width = 2; app.shape_fill = true; app.shape_line = true;
     app.bucket_gap = 1;
     app.trim_mode = TRIM_TO_INTERSECTION;
@@ -403,6 +479,7 @@ bool app_open_path(const char *path) {
     }
     if (dot && (!_stricmp(dot, ".wav") || !_stricmp(dot, ".mp3") || !_stricmp(dot, ".ogg"))) return import_audio(path);
     if (app_is_image(path)) return app_import_image(path, v2(-1, -1));
+    if (dot && !_stricmp(dot, ".vxbrush")) return import_vxbrush(path);
     if (dot && (!_stricmp(dot, ".sut") || !_stricmp(dot, ".sutg"))) {
         bool ok = import_sut(path, err, sizeof(err));
         app_toast("%s", err);
@@ -444,7 +521,7 @@ static void open_dialog(void) {
 static void import_dialog(int kind) {
     char path[512];
     if (kind == 0 && plat_open_dialog(path, sizeof(path), "Flash / Animate documents", "*.fla;*.xfl")) app_open_path(path);
-    if (kind == 1 && plat_open_dialog(path, sizeof(path), "Clip Studio Paint brushes", "*.sut")) app_open_path(path);
+    if (kind == 1 && plat_open_dialog(path, sizeof(path), "Brushes (Vertexa, Clip Studio Paint)", "*.vxbrush;*.sut")) app_open_path(path);
     if (kind == 2 && plat_open_dialog(path, sizeof(path), "Sound files", "*.wav;*.mp3;*.ogg")) app_open_path(path);
     if (kind == 3 && plat_open_dialog(path, sizeof(path), "Images", "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tga;*.psd")) app_open_path(path);
 }
@@ -718,7 +795,7 @@ static void title_bar(Rect r) {
 static void tools_column(Rect r) {
     static float scroll;
     dl_rect(ui.dl, r, C_S1);
-    dl_rect(ui.dl, rect(r.x + r.w - 1, r.y, 1, r.h), C_LINE);
+    dl_rect(ui.dl, rect(app.layout.tools_right ? r.x : r.x + r.w - 1, r.y, 1, r.h), C_LINE);
     float total = 20;
     for (int i = 0; i < COUNT(TOOLS); i++) total += TOOLS[i].k ? 34 : 13;
     if (rect_has(r, ui.in.mouse) && ui_mouse_free() && ui.in.wheel_y) scroll -= ui.in.wheel_y * 34;
@@ -846,6 +923,7 @@ void app_frame(void) {
     ui.modal = app.settings || exporter_is_open() || ASK.open;   // the base layer gets no mouse while these are open
     tick_playback();
     autosave_tick();
+    layout_tick();
     shortcuts();
     Rect full = rect(0, 0, ui.w, ui.h);
     dl_rect(ui.dl, full, C_BG);
@@ -858,10 +936,13 @@ void app_frame(void) {
         save_prompt();
         return;
     }
-    Rect right = cut_right(&full, M_RIGHT_W);
+    // where the parts go: Settings > Layout
+    const Layout *L = &app.layout;
+    app.layout.panel_w = clampf(L->panel_w, 260, 420);
+    Rect right = L->panel_left ? cut_left(&full, L->panel_w) : cut_right(&full, L->panel_w);
     app.tl_h = clampf(app.tl_h, 150, MAX(150, ui.h - 260));
-    Rect tl = cut_bottom(&full, app.tl_h);
-    Rect tools = cut_left(&full, M_TOOLS_W);
+    Rect tl = L->timeline_top ? cut_top(&full, app.tl_h) : cut_bottom(&full, app.tl_h);
+    Rect tools = L->tools_right ? cut_right(&full, M_TOOLS_W) : cut_left(&full, M_TOOLS_W);
     Rect ctx = cut_top(&full, M_CTX_H);
     Rect stage = full;
 
@@ -869,18 +950,27 @@ void app_frame(void) {
     context_bar(ctx);
     tools_column(tools);
     timeline_ui(tl);
+    if (L->timeline_top) dl_rect(ui.dl, rect(tl.x, tl.y + tl.h - 1, tl.w, 1), C_LINE);
 
-    // timeline height splitter
-    Rect split = {tl.x, tl.y - 3, tl.w, 6};
+    // the timeline's and the panel's inner edges drag
+    Rect split = {tl.x, L->timeline_top ? tl.y + tl.h - 3 : tl.y - 3, tl.w, 6};
     UiResp sp = ui_interact(ui_id("tl-split"), split);
     if (sp.hover || sp.held) ui_cursor(SAPP_MOUSECURSOR_RESIZE_NS);
-    if (sp.held) app.tl_h -= sp.delta.y;
+    if (sp.held) app.tl_h += L->timeline_top ? sp.delta.y : -sp.delta.y;
+    Rect psplit = {L->panel_left ? right.x + right.w - 3 : right.x - 3, right.y, 6, right.h};
+    UiResp pp = ui_interact(ui_id("panel-split"), psplit);
+    if (pp.hover || pp.held) ui_cursor(SAPP_MOUSECURSOR_RESIZE_EW);
+    if (pp.held) app.layout.panel_w = clampf(L->panel_w + (L->panel_left ? pp.delta.x : -pp.delta.x), 260, 420);
 
     dl_rect(ui.dl, right, C_S1);
-    dl_rect(ui.dl, rect(right.x, right.y, 1, right.h), C_LINE);
-    right.x += 1; right.w -= 1;
-    int rows = (app.nswatches + 1 + 9) / 10;
-    Rect col = cut_top(&right, 16 + 4 + 204 + 16 + 30 + 14 + rows * 27 - 7 + 16);
+    dl_rect(ui.dl, rect(L->panel_left ? right.x + right.w - 1 : right.x, right.y, 1, right.h), C_LINE);
+    if (!L->panel_left) right.x += 1;
+    right.w -= 1;
+    int per_row = MAX(1, (int)((right.w - 32 + 7) / 27));
+    int rows = (app.nswatches + 1 + per_row - 1) / per_row;
+    float col_h = 16 + 4 + 204 + 16 + 30 + 14 + rows * 27 - 7 + 16;
+    Rect col = L->color_below ? cut_bottom(&right, col_h) : cut_top(&right, col_h);
+    if (L->color_below) dl_rect(ui.dl, rect(col.x, col.y, col.w, 1), C_LINE);
     color_panel(col);
     right_panel(right);
 

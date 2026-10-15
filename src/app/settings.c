@@ -1,6 +1,8 @@
 // Settings: General (auto-save, recovery copies, undo, interface size, pen), Performance (GPU mode,
-// anti-aliasing, stage resolution, overlay), Keyboard (every shortcut, two bindings each) and Theme.
-// Files in %APPDATA%/Vertexa: settings.txt (preferences), keys.txt (shortcuts, see keys.c) and themes.txt
+// anti-aliasing, stage resolution, overlay), Keyboard (every shortcut, two bindings each), Layout (where
+// the panels go, kept as profiles) and Theme.
+// Files in %APPDATA%/Vertexa: settings.txt (preferences), keys.txt (shortcuts, see keys.c), layouts.txt
+// (layout profiles, written like the themes) and themes.txt
 // (built-in and user presets plus the theme in use, marked "@"; colors are role=RRGGBB pairs, so files
 // written by older builds keep working when roles are added).
 #include "app/app.h"
@@ -139,6 +141,111 @@ static void save_preset(char *name) {
     app_toast("Theme \xE2\x80\x9C%s\xE2\x80\x9D saved", final);
 }
 
+/* ── layouts ── */
+
+static const Layout LBUILTIN[] = {
+    {"Vertexa", 0, 0, 0, 0, 300, 316},
+    {"Animate Classic", 0, 1, 1, 0, 300, 260},
+    {"Left-handed", 1, 1, 0, 0, 300, 316},
+    {"Compact", 0, 0, 0, 1, 264, 220},
+};
+
+static struct {
+    Layout *user;               // stb_ds array
+    Layout saved;               // the layout in use as last written
+    int naming;                 // 1 = start typing a profile name, 2 = typing
+    char newname[48];
+} LY;
+
+static const Layout *lfind(const char *name) {
+    for (int i = 0; i < COUNT(LBUILTIN); i++) if (!strcmp(LBUILTIN[i].name, name)) return &LBUILTIN[i];
+    for (ptrdiff_t i = 0; i < arrlen(LY.user); i++) if (!strcmp(LY.user[i].name, name)) return &LY.user[i];
+    return NULL;
+}
+static int luser_index(const char *name) {
+    for (ptrdiff_t i = 0; i < arrlen(LY.user); i++) if (!strcmp(LY.user[i].name, name)) return (int)i;
+    return -1;
+}
+static bool lsame(const Layout *a, const Layout *b) {   // the arrangement, names aside
+    return a->panel_left == b->panel_left && a->tools_right == b->tools_right && a->timeline_top == b->timeline_top &&
+           a->color_below == b->color_below && fabsf(a->panel_w - b->panel_w) < 0.5f && fabsf(a->tl_h - b->tl_h) < 0.5f;
+}
+static void lapply(const Layout *p) { app.layout = *p; app.tl_h = p->tl_h; }
+
+static void lwrite(FILE *f, const char *prefix, const Layout *p) {
+    fprintf(f, "%s%s\tpanel=%s tools=%s timeline=%s color=%s width=%g height=%g\n", prefix, p->name, p->panel_left ? "left" : "right",
+            p->tools_right ? "right" : "left", p->timeline_top ? "top" : "bottom", p->color_below ? "bottom" : "top", p->panel_w, p->tl_h);
+}
+static void layouts_save(void) {
+    app.layout.tl_h = app.tl_h;
+    LY.saved = app.layout;
+    char path[1024];
+    if (!plat_config_path("layouts.txt", path, sizeof(path))) return;
+    FILE *f = plat_fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "# Vertexa layouts: name<TAB>key=value ... ; the line starting with @ is the layout in use\n");
+    lwrite(f, "@", &app.layout);
+    for (ptrdiff_t i = 0; i < arrlen(LY.user); i++) lwrite(f, "", &LY.user[i]);
+    fclose(f);
+}
+static void lparse(char *s, Layout *p) {
+    for (char *tok = strtok(s, " \t\r\n"); tok; tok = strtok(NULL, " \t\r\n")) {
+        char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        *eq = 0;
+        const char *v = eq + 1;
+        if (!strcmp(tok, "panel")) p->panel_left = !strcmp(v, "left");
+        else if (!strcmp(tok, "tools")) p->tools_right = !strcmp(v, "right");
+        else if (!strcmp(tok, "timeline")) p->timeline_top = !strcmp(v, "top");
+        else if (!strcmp(tok, "color")) p->color_below = !strcmp(v, "bottom");
+        else if (!strcmp(tok, "width")) p->panel_w = clampf((float)atof(v), 260, 420);
+        else if (!strcmp(tok, "height")) p->tl_h = clampf((float)atof(v), 150, 900);
+    }
+}
+static void layouts_load(void) {
+    lapply(&LBUILTIN[0]);
+    char path[1024];
+    FILE *f = plat_config_path("layouts.txt", path, sizeof(path)) ? plat_fopen(path, "rb") : NULL;
+    char line[512];
+    while (f && fgets(line, sizeof(line), f)) {
+        if (line[0] == '#') continue;
+        char *tab = strchr(line, '\t');
+        if (!tab) continue;
+        *tab = 0;
+        bool current = line[0] == '@';
+        const char *name = current ? line + 1 : line;
+        if (!name[0]) continue;
+        Layout p = LBUILTIN[0];
+        snprintf(p.name, sizeof(p.name), "%s", name);
+        lparse(tab + 1, &p);
+        if (current) lapply(&p);
+        else if (!lfind(p.name)) arrput(LY.user, p);
+    }
+    if (f) fclose(f);
+    if (!lfind(app.layout.name)) snprintf(app.layout.name, sizeof(app.layout.name), "%s", LBUILTIN[0].name);
+    LY.saved = app.layout;
+}
+void layout_tick(void) {
+    app.layout.tl_h = app.tl_h;
+    if (!ui.in.down[0] && (!lsame(&app.layout, &LY.saved) || strcmp(app.layout.name, LY.saved.name))) layouts_save();
+}
+static void lsave_profile(char *name) {
+    while (*name == ' ') memmove(name, name + 1, strlen(name));
+    for (size_t n = strlen(name); n && name[n - 1] == ' '; n--) name[n - 1] = 0;
+    for (char *c = name; *c; c++) if (*c == '\t') *c = ' ';
+    if (!name[0]) return;
+    char final[48];
+    snprintf(final, sizeof(final), "%s", name);
+    for (int i = 0; i < COUNT(LBUILTIN); i++) if (!strcmp(LBUILTIN[i].name, final)) { snprintf(final, sizeof(final), "%.40s (mine)", name); break; }
+    Layout p = app.layout;
+    snprintf(p.name, sizeof(p.name), "%s", final);
+    int k = luser_index(final);
+    if (k >= 0) LY.user[k] = p; else arrput(LY.user, p);
+    snprintf(app.layout.name, sizeof(app.layout.name), "%s", final);
+    layouts_save();
+    app_toast("Layout \xE2\x80\x9C%s\xE2\x80\x9D saved", final);
+}
+
 /* ── preferences file ── */
 
 static struct {
@@ -196,6 +303,7 @@ void settings_load(void) {
     prefs_load();
     hist_set_limit(app.undo_steps);
     themes_load();
+    layouts_load();
     char dir[1024];
     if (plat_config_path("recovery", dir, sizeof(dir)) && plat_count_files(dir, "*.vxa") > 0)
         app_toast("Recovery copies from an earlier session are kept, see Settings > General > Open folder");
@@ -517,12 +625,104 @@ static void theme_page(Rect c) {
     }
 }
 
+/* ── Layout ── */
+
+static int nearest(const int *vals, int n, float v) {
+    int k = 0;
+    for (int i = 1; i < n; i++) if (fabsf(vals[i] - v) < fabsf(vals[k] - v)) k = i;
+    return k;
+}
+
+static void layout_page(Rect c) {
+    Layout *L = &app.layout;
+    // profile: pick, save as, delete (the user's)
+    float x = c.x, y = RY;
+    Rect drop = {x, y, 240, 30};
+    UiId nid = ui_id("layout-name");
+    const Layout *base = lfind(L->name);
+    if (!base) base = &LBUILTIN[0];
+    bool is_user = luser_index(L->name) >= 0;
+    float bx = x + 240 + 8;
+    if (LY.naming) {
+        if (LY.naming == 1) { ui_focus_text(nid, LY.newname); LY.naming = 2; }
+        if (ui_text_field(nid, drop, LY.newname, sizeof(LY.newname), NULL)) { lsave_profile(LY.newname); LY.naming = 0; }
+        else if (ui.focus != nid) LY.naming = 0;   // Esc
+        font_draw_in(ui.dl, F_UI, rect(bx + 4, y, 300, 30), ALIGN_LEFT, "Type a name. Enter saves, Esc cancels", C_TX3);
+    } else {
+        if (ui_text_button(ui_id("layout-save"), rect(bx, y, 92, 30), "Save as\xE2\x80\xA6", false)) {
+            snprintf(LY.newname, sizeof(LY.newname), "%s", is_user ? L->name : "");
+            LY.naming = 1;
+        }
+        ui_tooltip(ui_id("layout-save"), rect(bx, y, 92, 30), "Save this layout as a profile");
+        bx += 92 + 4;
+        if (is_user && ui_text_button(ui_id("layout-del"), rect(bx, y, 72, 30), "Delete", false)) {
+            char gone[48]; snprintf(gone, sizeof(gone), "%s", L->name);
+            arrdel(LY.user, luser_index(L->name));
+            snprintf(L->name, sizeof(L->name), "%s", LBUILTIN[0].name);
+            layouts_save();
+            app_toast("Layout \xE2\x80\x9C%s\xE2\x80\x9D deleted", gone);
+        }
+        if (is_user) bx += 72 + 4;
+        if (!lsame(L, base) && ui_text_button(ui_id("layout-revert"), rect(bx, y, 72, 30), "Revert", false)) lapply(base);
+        ui_tooltip(ui_id("layout-revert"), rect(bx, y, 72, 30), "Back to the profile as saved");
+    }
+    RY += 30 + 30;
+    dl_rect(ui.dl, rect(c.x, RY - 14, c.w, 1), C_LINE);
+
+    static const char *sides[] = {"Left", "Right"};
+    Rect ctl = row(c, "Panels", "Colors, brushes, the library and properties", 300);
+    int ni = ui_segmented(ui_id("layout-panel"), ctl, sides, 2, !L->panel_left);
+    L->panel_left = ni == 0;
+
+    ctl = row(c, "Tools", "The tools column, beside the stage", 300);
+    ni = ui_segmented(ui_id("layout-tools"), ctl, sides, 2, L->tools_right);
+    L->tools_right = ni == 1;
+
+    static const char *tl[] = {"Above the stage", "Below the stage"};
+    ctl = row(c, "Timeline", "Above the stage as in Animate's Classic workspace", 300);
+    ni = ui_segmented(ui_id("layout-timeline"), ctl, tl, 2, !L->timeline_top);
+    L->timeline_top = ni == 0;
+
+    static const char *cw[] = {"Above the tabs", "Below the tabs"};
+    ctl = row(c, "Color wheel", "Where the colors sit in the panel", 300);
+    ni = ui_segmented(ui_id("layout-color"), ctl, cw, 2, L->color_below);
+    L->color_below = ni == 1;
+
+    static const char *widths[] = {"264", "300", "340", "380"};
+    static const int widths_v[] = {264, 300, 340, 380};
+    ctl = row(c, "Panel width", "Or drag the panel's edge", 300);
+    int i = nearest(widths_v, 4, L->panel_w);
+    ni = ui_segmented(ui_id("layout-width"), ctl, widths, 4, i);
+    if (ni != i) L->panel_w = (float)widths_v[ni];
+
+    static const char *heights[] = {"Short", "Medium", "Tall"};
+    static const int heights_v[] = {220, 316, 420};
+    ctl = row(c, "Timeline height", "Or drag the timeline's edge", 300);
+    i = nearest(heights_v, 3, app.tl_h);
+    ni = ui_segmented(ui_id("layout-height"), ctl, heights, 3, i);
+    if (ni != i) app.tl_h = (float)heights_v[ni];
+    L->tl_h = app.tl_h;
+
+    // the profile dropdown goes last so its list is drawn over everything else
+    int n = 0, sel = 0;
+    const char *items[40];
+    static char edited[64];
+    for (int k = 0; k < COUNT(LBUILTIN) && n < 40; k++) items[n++] = LBUILTIN[k].name;
+    for (ptrdiff_t k = 0; k < arrlen(LY.user) && n < 40; k++) items[n++] = LY.user[k].name;
+    for (int k = 0; k < n; k++) if (!strcmp(items[k], base->name)) sel = k;
+    if (!lsame(L, base)) { snprintf(edited, sizeof(edited), "%s (edited)", items[sel]); items[sel] = edited; }
+    if (!LY.naming) {
+        int ns = ui_dropdown(ui_id("layout-profile"), drop, items, n, sel);
+        if (ns != sel) lapply(ns < COUNT(LBUILTIN) ? &LBUILTIN[ns] : &LY.user[ns - COUNT(LBUILTIN)]);
+    }
+}
+
 /* ── the window ── */
 
 void settings_window(void) {
     if (!app.settings) return;
     // Esc first leaves a text field, a preset name or a key capture; only a later Esc closes the window
-    bool esc_closes = ui.in.key_pressed[SAPP_KEYCODE_ESCAPE] && !ui.focus && !ui.popup && !S.naming && P.cap_act < 0;
+    bool esc_closes = ui.in.key_pressed[SAPP_KEYCODE_ESCAPE] && !ui.focus && !ui.popup && !S.naming && !LY.naming && P.cap_act < 0;
     ui_overlay(true);
     const float W = 900, NAV = 200;
     float H = MIN(690, ui.h - 24);
@@ -539,7 +739,7 @@ void settings_window(void) {
     // sections
     font_draw(ui.dl, F_TITLE, r.x + 22, r.y + 38, "Settings", C_TX);
     static const struct { IconId ic; const char *name; } PAGES[SET_COUNT] = {
-        {IC_SLIDERS, "General"}, {IC_CPU, "Performance"}, {IC_KEYBOARD, "Keyboard"}, {IC_PALETTE, "Theme"},
+        {IC_SLIDERS, "General"}, {IC_CPU, "Performance"}, {IC_KEYBOARD, "Keyboard"}, {IC_LAYOUT, "Layout"}, {IC_PALETTE, "Theme"},
     };
     for (int i = 0; i < SET_COUNT; i++) {
         Rect b = {r.x + 10, r.y + 62 + i * 38, NAV - 20, 34};
@@ -548,7 +748,7 @@ void settings_window(void) {
         if (on) dl_rrect(ui.dl, b, 7, C_S3); else if (re.hover) dl_rrect(ui.dl, b, 7, C_S2);
         icon_draw(ui.dl, PAGES[i].ic, v2(b.x + 20, b.y + 17), ICON_M, false, on ? C_AC : re.hover ? C_TX : C_TX2);
         font_draw_in(ui.dl, F_UI_MED, rect(b.x + 40, b.y, b.w - 44, b.h), ALIGN_LEFT, PAGES[i].name, on || re.hover ? C_TX : C_TX2);
-        if (re.clicked && !on) { P.page = i; P.cap_act = -1; S.naming = 0; ui.focus = 0; }
+        if (re.clicked && !on) { P.page = i; P.cap_act = -1; S.naming = LY.naming = 0; ui.focus = 0; }
     }
     font_draw_in(ui.dl, F_SMALL, rect(r.x + 22, r.y + r.h - 34, NAV - 30, 16), ALIGN_LEFT, "Vertexa Alpha", C_TX3);
 
@@ -562,6 +762,7 @@ void settings_window(void) {
     case SET_GENERAL: general_page(c); break;
     case SET_PERFORMANCE: perf_page(c); break;
     case SET_KEYS: keys_page(c); break;
+    case SET_LAYOUT: layout_page(c); break;
     default: theme_page(c); break;
     }
     dl_pop_clip(ui.dl);
@@ -575,6 +776,6 @@ void settings_window(void) {
         if (S.dirty) save();
         if (P.prefs_dirty) prefs_save();
         app.settings = false;
-        S.naming = 0; P.cap_act = -1;
+        S.naming = LY.naming = 0; P.cap_act = -1;
     }
 }

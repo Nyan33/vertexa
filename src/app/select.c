@@ -1021,6 +1021,34 @@ void select_delete(void) {
     doc_touch(app.doc);
 }
 
+// the color panel moved: the selected vectors take the color right away, as in Umoupen. With only lines
+// or only fills selected they all do; with both, the fill color goes to the fills and the stroke color
+// to the lines. commit starts a new undo step (once per drag of the wheel)
+bool select_recolor(Color c, int target, bool commit) {
+    Drawing *dr = sel_drawing();
+    if (!dr || !select_count() || st_cannot_edit()) return false;
+    bool lines = arrlen(SL.secs) > 0, fills = false;
+    for (ptrdiff_t k = 0; k < arrlen(SL.idx); k++) {
+        Item *it = &dr->items[SL.idx[k]];
+        if (it->erase) continue;
+        lines |= it->kind == IT_STROKE;
+        fills |= it->kind == IT_FILL;
+    }
+    if (!lines && !fills) return false;
+    bool to_lines = !fills || target == 1, to_fills = !lines || target == 0;
+    if (commit) app_commit();
+    materialize();
+    dr = sel_drawing();
+    for (ptrdiff_t k = 0; k < arrlen(SL.idx); k++) {
+        Item *it = &dr->items[SL.idx[k]];
+        if (it->erase) continue;
+        if (it->kind == IT_STROKE && to_lines) it->color = c;
+        if (it->kind == IT_FILL && to_fills) { it->color = c; it->grad = 0; it->sym = 0; arrfree(it->stops); }
+    }
+    doc_touch(app.doc);
+    return true;
+}
+
 void select_copy(bool cut) {
     Drawing *dr = sel_drawing();
     if (!dr || !select_count()) return;

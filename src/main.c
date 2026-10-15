@@ -176,6 +176,32 @@ static void selftest_shape(int f) {
     if (f == 66) in_move(stage_to_screen(v2(200, 100)));
 }
 
+// --selftest=brushes: a row dragged two places down. brush-edit: a new brush, its settings open.
+// recolor: a stroke selected, a swatch clicked: the stroke takes the color, one undo puts it back
+static void selftest_brushes(int f) {
+    if (M.key_release) { ui.in.key_down[M.key_release] = false; ui.in.mods = 0; M.key_release = 0; }
+    if (M.page == 0) {
+        drag_screen(f, 4, 6, v2(ui.w - 260, 446), v2(ui.w - 260, 540));
+        if (f == 12) vx_log("selftest: order %s, %s, %s; current %d", app.presets[0].name, app.presets[1].name, app.presets[2].name, app.preset);
+        if (f == 13) in_move(v2(ui.w - 200, 482));
+    } else if (M.page == 1 || M.page == 3) {
+        if (f == 3) brush_new();
+        if (M.page == 3) click_at(f, 6, v2(ui.w - 150, 914));   // Delete Brush: asks first
+        if (f == 6) vx_log("selftest: new brush \"%s\" (%d brushes), editing %d", app.presets[app.preset].name, (int)arrlen(app.presets), brush_editing());
+    } else {
+        if (f == 3) { app.fill = hex(0x141414); app.brush_size = 12; in_key(SAPP_KEYCODE_B, 0); }
+        drag_line(f, 5, 8, v2(300, 300), v2(900, 360));
+        if (f == 16) in_key(SAPP_KEYCODE_V, 0);
+        if (f == 18) in_key(SAPP_KEYCODE_A, MOD_CTRL);
+        click_at(f, 20, v2(ui.w - 57, 330));   // the green swatch
+        if (f == 23) { Item *it = select_first(); vx_log("selftest: recolor: selected %d, color %08X", select_count(), it ? it->color : 0); }
+        if (f == 24) app_undo();
+        if (f == 26) { Drawing *dr = st_drawing(false); vx_log("selftest: after undo: color %08X", dr && arrlen(dr->items) ? dr->items[0].color : 0); }
+        if (f == 27) app_redo();
+        if (f == 28) in_move(v2(700, 600));
+    }
+}
+
 static void selftest_select(int f) {
     static u32 v0; static float b[4]; static V2 pv;
     if (M.key_release) { ui.in.key_down[M.key_release] = false; ui.in.mods = 0; M.key_release = 0; }
@@ -644,8 +670,10 @@ static void frame(void) {
     else if (M.selftest && M.variant == 16) selftest_blend(M.frames);
     else if (M.selftest && M.variant == 17) selftest_image(M.frames);
     else if (M.selftest && M.variant == 18) selftest_shape(M.frames);
+    else if (M.selftest && M.variant == 19) selftest_brushes(M.frames);
     else if (M.selftest && M.variant == 13) {   // --selftest=curve: a point added to the pressure curve, then removed
-        V2 add = {1520, 850};
+        V2 add = {ui.w - 80, 850};
+        if (M.frames == 2) brush_new();   // the curve is in a brush's settings
         if (M.frames == 4) vx_log("selftest: curve points %d", app.curve.n);
         click_at(M.frames, 6, add);
         if (M.frames == 9) vx_log("selftest: after a click %d points", app.curve.n);
@@ -846,6 +874,7 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         else if (!strcmp(argv[i], "--selftest=settings")) { M.selftest = true; M.variant = 5; M.page = SET_GENERAL; M.capture_frame = 20; }
         else if (!strcmp(argv[i], "--selftest=settings-perf")) { M.selftest = true; M.variant = 5; M.page = SET_PERFORMANCE; M.capture_frame = 20; }
         else if (!strcmp(argv[i], "--selftest=settings-keys")) { M.selftest = true; M.variant = 5; M.page = SET_KEYS; M.capture_frame = 20; }
+        else if (!strcmp(argv[i], "--selftest=settings-layout")) { M.selftest = true; M.variant = 5; M.page = SET_LAYOUT; M.capture_frame = 20; }
         else if (!strcmp(argv[i], "--selftest=settings-theme")) { M.selftest = true; M.variant = 5; M.page = SET_THEME; M.capture_frame = 20; }
         else if (!strcmp(argv[i], "--selftest=settings-save")) { M.selftest = true; M.variant = 5; M.page = SET_THEME; M.save_test = true; M.capture_frame = 22; }
         else if (!strcmp(argv[i], "--selftest=recovery")) { M.selftest = true; M.variant = 8; M.capture_frame = 30; }
@@ -858,6 +887,10 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         else if (!strcmp(argv[i], "--selftest=export-symbols")) { M.selftest = true; M.variant = 14; M.capture_frame = 94; }
         else if (!strcmp(argv[i], "--selftest=library")) { M.selftest = true; M.variant = 14; M.page = 2; M.capture_frame = 82; }
         else if (!strcmp(argv[i], "--selftest=export-window")) { M.selftest = true; M.variant = 14; M.page = 1; M.capture_frame = 80; }
+        else if (!strcmp(argv[i], "--selftest=brushes")) { M.selftest = true; M.variant = 19; M.capture_frame = 16; }
+        else if (!strcmp(argv[i], "--selftest=brush-edit")) { M.selftest = true; M.variant = 19; M.page = 1; M.capture_frame = 10; }
+        else if (!strcmp(argv[i], "--selftest=brush-delete")) { M.selftest = true; M.variant = 19; M.page = 3; M.capture_frame = 12; }
+        else if (!strcmp(argv[i], "--selftest=recolor")) { M.selftest = true; M.variant = 19; M.page = 2; M.capture_frame = 30; }
         else if (!strcmp(argv[i], "--selftest=shape")) { M.selftest = true; M.variant = 18; M.capture_frame = 58; }
         else if (!strcmp(argv[i], "--selftest=shape-edit")) { M.selftest = true; M.variant = 18; M.page = 1; M.capture_frame = 70; }
         else if (!strcmp(argv[i], "--selftest=image")) { M.selftest = true; M.variant = 17; M.capture_frame = 12; }
