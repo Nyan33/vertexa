@@ -9,6 +9,7 @@ void plat_init(float dpi_scale, bool maximize);
 void plat_set_scale(float dpi_scale);
 int plat_pen_take(PenSample *out, int cap);  // samples received since the last call
 bool plat_pen_in_range(void);                // pen hovering or touching
+bool plat_pen_contact(void);                 // pen touching the tablet
 bool plat_pen_eraser(void);
 
 void plat_set_caption(Rect bar, const Rect *holes, int n);  // logical px; holes are clickable controls

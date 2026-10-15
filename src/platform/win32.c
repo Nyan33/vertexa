@@ -12,7 +12,7 @@ static struct {
     float scale;
     Rect bar, holes[96]; int nholes;
     PenSample q[4096]; int qn;
-    bool pen_range, pen_eraser;
+    bool pen_range, pen_eraser, pen_contact;
 } W;
 
 void plat_set_scale(float s) { W.scale = s; }
@@ -30,6 +30,7 @@ int plat_pen_take(PenSample *out, int cap) {
     return n;
 }
 bool plat_pen_in_range(void) { return W.pen_range; }
+bool plat_pen_contact(void) { return W.pen_contact; }
 bool plat_pen_eraser(void) { return W.pen_eraser; }
 
 void plat_minimize(void) { ShowWindow(W.hwnd, SW_MINIMIZE); }
@@ -37,12 +38,11 @@ void plat_toggle_maximize(void) { ShowWindow(W.hwnd, IsZoomed(W.hwnd) ? SW_RESTO
 bool plat_maximized(void) { return IsZoomed(W.hwnd) != 0; }
 void plat_close(void) { PostMessageW(W.hwnd, WM_CLOSE, 0, 0); }
 
-/* Pen positions. The cursor the artist aims with is moved by the tablet driver, by its own mapping of the
-   tablet onto the screens; the positions in WM_POINTER (pixels, and the tablet's finer units) follow
-   Windows Ink's mapping, which can differ (several monitors, a part of the tablet, kept proportions), so
-   lines landed away from the cursor. The tablet's units are fitted to the cursor instead: a straight line
-   per axis, least squares, with older pairs fading so a changed mapping is learnt again. Until the fit has
-   seen enough movement the cursor itself is used. */
+/* Pen positions. Windows gives whole pixels (ptPixelLocation) and the tablet's own units, much finer
+   (ptHimetricLocation). How the driver maps the tablet onto the screen isn't something the device
+   rectangles tell reliably, so the fine units are fitted to the pixels as the pen moves: a straight line per
+   axis, least squares, older pairs fading. The fit is used once it has seen enough movement and agrees with
+   the pixels within a pixel and a half; until then the pixels are used as they are. */
 static FILE *PENLOG;
 static int penlog_lines;
 void plat_pen_log_open(void) {
@@ -85,16 +85,10 @@ static void push_pen(UINT32 id) {
     count = MIN(count, 64);
     if (!GetPointerPenInfoHistory(id, &count, hist)) return;
     if (hist[0].pointerInfo.sourceDevice != PF.device) { PF.device = hist[0].pointerInfo.sourceDevice; memset(PF.ax, 0, sizeof(PF.ax)); }
-    POINT cur;
-    bool have_cur = GetCursorPos(&cur);
-    bool touching = (hist[0].pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) != 0;
+    POINT cur = {0, 0};
+    if (PENLOG) GetCursorPos(&cur);
+    W.pen_contact = (hist[0].pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) != 0;
     W.pen_eraser = (hist[0].penFlags & (PEN_FLAG_ERASER | PEN_FLAG_INVERTED)) != 0;
-    double tx, ty;
-    bool fitted = fit_map(&PF.ax[0], 0, &tx) && fit_map(&PF.ax[1], 0, &ty);
-    if (have_cur && (!touching || !fitted)) {   // the newest sample and where the cursor is now (learnt while hovering)
-        fit_add(&PF.ax[0], hist[0].pointerInfo.ptHimetricLocation.x, cur.x);
-        fit_add(&PF.ax[1], hist[0].pointerInfo.ptHimetricLocation.y, cur.y);
-    }
     POINT origin = {0, 0};
     ClientToScreen(W.hwnd, &origin);
     if (PENLOG) {
@@ -117,11 +111,13 @@ static void push_pen(UINT32 id) {
     }
     for (int i = (int)count - 1; i >= 0; i--) {   // history is newest first
         POINTER_PEN_INFO *p = &hist[i];
+        double px = p->pointerInfo.ptPixelLocation.x, py = p->pointerInfo.ptPixelLocation.y;
+        double hx = p->pointerInfo.ptHimetricLocation.x, hy = p->pointerInfo.ptHimetricLocation.y;
         double fx, fy;
-        float sx, sy;
-        if (fit_map(&PF.ax[0], p->pointerInfo.ptHimetricLocation.x, &fx) && fit_map(&PF.ax[1], p->pointerInfo.ptHimetricLocation.y, &fy)) { sx = (float)fx; sy = (float)fy; }
-        else if (i == 0 && have_cur) { sx = (float)cur.x; sy = (float)cur.y; }
-        else continue;   // not fitted yet: only the newest sample, at the cursor
+        float sx = (float)px, sy = (float)py;
+        if (fit_map(&PF.ax[0], hx, &fx) && fit_map(&PF.ax[1], hy, &fy) && fabs(fx - px) <= 1.5 && fabs(fy - py) <= 1.5) { sx = (float)fx; sy = (float)fy; }
+        fit_add(&PF.ax[0], hx, px);
+        fit_add(&PF.ax[1], hy, py);
         bool contact = (p->pointerInfo.pointerFlags & POINTER_FLAG_INCONTACT) != 0;
         PenSample s = {
             .x = (sx - origin.x) / W.scale, .y = (sy - origin.y) / W.scale,
@@ -179,10 +175,14 @@ static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     case WM_POINTERUP: {
         UINT32 id = GET_POINTERID_WPARAM(wp);
         POINTER_INPUT_TYPE type;
-        if (GetPointerType(id, &type) && type == PT_PEN) { W.pen_range = m != WM_POINTERUP || IS_POINTER_INRANGE_WPARAM(wp); push_pen(id); }
+        if (GetPointerType(id, &type) && type == PT_PEN) {
+            W.pen_range = m != WM_POINTERUP || IS_POINTER_INRANGE_WPARAM(wp);
+            push_pen(id);
+            if (m == WM_POINTERUP) W.pen_contact = false;
+        }
         break;
     }
-    case WM_POINTERLEAVE: W.pen_range = false; break;
+    case WM_POINTERLEAVE: W.pen_range = false; W.pen_contact = false; break;
     default: break;
     }
     return CallWindowProcW(W.orig, h, m, wp, lp);

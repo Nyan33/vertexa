@@ -30,6 +30,7 @@ static struct {
     bool space;
     bool cam_view;            // look through the camera: the stage shows exactly what exports
     PenSample pen[4096]; int npen;
+    PenSample *contact;   // the pen's samples since it touched down, before the stroke began (stb_ds)
 } S;
 
 static struct { int mode; V2 m0, c0; float cam0[4]; } CAM;   // dragging the camera frame
@@ -380,6 +381,13 @@ void stage_ui(Rect r) {
     ensure_targets((int)roundf(r.w * S.px), (int)roundf(r.h * S.px));   // before anything references the texture
     if (resized && S.fitted) stage_fit();
     S.npen = plat_pen_take(S.pen, COUNT(S.pen));
+    // Windows sends the pen's click a while after the tip touches down (it waits to tell a tap from a
+    // drag), so the stroke would begin late and lose its start: what the pen drew since it touched is
+    // kept until the stroke begins, then the stroke starts from there
+    if (!S.drawing) {
+        if (S.npen && arrlen(S.contact) + S.npen <= COUNT(S.pen)) memcpy(arraddnptr(S.contact, S.npen), S.pen, sizeof(PenSample) * S.npen);
+        else if (!S.npen && !plat_pen_contact()) arrsetlen(S.contact, 0);
+    }
 
     // view pill first, so it wins over the stage
     char zs[16]; snprintf(zs, sizeof(zs), "%d%%", (int)roundf(S.z * 100));
@@ -423,6 +431,11 @@ void stage_ui(Rect r) {
                     S.draw_tool = eff;
                     bb_begin(&S.b, opts_for(eff));
                     S.drawing = true;
+                    if (arrlen(S.contact)) {   // from where the pen touched down
+                        S.npen = (int)arrlen(S.contact);
+                        memcpy(S.pen, S.contact, sizeof(PenSample) * S.npen);
+                        arrsetlen(S.contact, 0);
+                    }
                     V2 p = st_local(ui.in.mouse);
                     if (!S.npen) bb_add(&S.b, p.x, p.y, plat_pen_in_range() ? 0.2f : 1, 0);
                 }
