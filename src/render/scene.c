@@ -668,6 +668,16 @@ static void render_symbol(Frame *F, Doc *d, const Item *inst, int off, Mat m, fl
     frame_pop(F, bl, 1);
 }
 
+void render_stroke(Frame *F, const Item *it, Mat m, Color c) {
+    if (!it->img_mode || !it->img || !frame_push(F)) { brush_draw(frame_dl(F), it, m, c, false); return; }
+    // the colour's alpha goes on the group, the stamps are drawn opaque-coloured
+    float a = ((c >> 24) & 255) / 255.0f;
+    brush_image_pipe(PIPE_MAX);
+    brush_draw(frame_dl(F), it, m, c | 0xff000000u, false);
+    brush_image_pipe(PIPE_NORMAL);
+    frame_pop(F, BLEND_NORMAL, a);
+}
+
 void render_items(Frame *F, Doc *d, Drawing *dr, int off, Mat m, float alpha, Color tint, int depth) {
     if (!dr) return;
     for (ptrdiff_t i = 0; i < arrlen(dr->items); i++) {
@@ -675,7 +685,8 @@ void render_items(Frame *F, Doc *d, Drawing *dr, int off, Mat m, float alpha, Co
         DrawList *dl = frame_dl(F);
         if (it->kind == IT_STROKE) {
             if (it->erase && tint) continue;
-            brush_draw(dl, it, m, it->erase ? 0xffffffffu : item_color(it->color, alpha, tint), it->erase);
+            if (it->img_mode && it->img && !it->erase) render_stroke(F, it, m, item_color(it->color, alpha, tint));
+            else brush_draw(dl, it, m, it->erase ? 0xffffffffu : item_color(it->color, alpha, tint), it->erase);
         } else if (it->kind == IT_FILL) {
             if (it->erase && tint) continue;
             draw_fill(dl, it, m, alpha, tint);

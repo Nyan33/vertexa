@@ -51,4 +51,7 @@ bool drawing_bounds(Doc *d, Drawing *dr, int off, Mat m, float b[4], int depth);
 bool item_bounds_m(Doc *d, const Item *it, int off, Mat m, float b[4], int depth);
 Layer *tl_layer(Timeline *t, int id);
 bool tl_hidden(Timeline *t, const Layer *l);
-u32 bitmap_texture(int id);   // the bitmap's texture view (made on first use), 0 if there is no such bitmap
+u32 bitmap_texture(int id);
+// a stroke; one drawn with image stamps gets a group of its own where the stamps keep the larger value
+// instead of piling up, so a stroke is as opaque as its colour however densely it is stamped (as in CSP)
+void render_stroke(Frame *F, const Item *it, Mat m, Color c);   // the bitmap's texture view (made on first use), 0 if there is no such bitmap

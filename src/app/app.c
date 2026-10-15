@@ -96,7 +96,7 @@ static bool parse_preset(char *line, BrushPreset *p) {
         else if (!strcmp(key, "density")) p->tex_density = clampf(v, 0, 100);
         else if (!strcmp(key, "scale")) p->tex_scale = clampf(v, 10, 400);
         else if (!strcmp(key, "image")) p->img_mode = (u8)CLAMP((int)v, 0, IMG_ALONG);
-        else if (!strcmp(key, "spacing")) p->img_spacing = clampf(v, 5, 500);
+        else if (!strcmp(key, "spacing")) p->img_spacing = clampf(v, 1, 500);
         else if (!strcmp(key, "flags")) p->img_flags = (u8)((int)v & 7);
         else if (!strcmp(key, "width_light")) p->img_w0 = clampf(v, 2, 300);
         else if (!strcmp(key, "width_heavy")) p->img_w1 = clampf(v, 2, 300);

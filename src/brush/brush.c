@@ -378,6 +378,9 @@ static void draw_run(Em *e, const Stroke *st, const SPt *p, int n, float scale) 
 
 /* ── image strokes: the tip image stamped along the centerline, or stretched over all of it ── */
 
+static u8 img_pipe = PIPE_NORMAL;
+void brush_image_pipe(u8 pipe) { img_pipe = pipe; }
+
 static void img_vtx(DrawList *dl, Mat m, V2 p, float u, float v, Color c, u32 *first) {
     static const float zero[4] = {0};
     V2 s = mat_ap(m, p);
@@ -396,7 +399,7 @@ static void image_draw(DrawList *dl, const Stroke *st, Mat m, Color color, u32 v
     u32 old = dl->tex;
     dl_set_tex(dl, view);
     dl_set_sampler(dl, SMP_MIP);
-    dl_set_pipe(dl, PIPE_NORMAL);
+    dl_set_pipe(dl, img_pipe);
     float step = st->img_mode == IMG_STAMPS ? MAX(0.25f, MIN(st->img_gap / 6, rmax / 2)) : MAX(0.25f, 1.5f / scale);
     SPt *p = brush_resample(st, step);
     int n = (int)arrlen(p);

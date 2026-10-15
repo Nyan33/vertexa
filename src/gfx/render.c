@@ -256,6 +256,13 @@ PipeSet gfx_make_pipes(int sample_count, sg_pixel_format color, sg_pixel_format 
     BLEND(PIPE_ALPHA, ZERO, SRC_ALPHA, ZERO, SRC_ALPHA);              // keeps what is below where the group is
     BLEND(PIPE_ERASE_OUT, ZERO, ONE_MINUS_SRC_ALPHA, ZERO, ONE_MINUS_SRC_ALPHA);
     #undef BLEND
+    {
+        sg_pipeline_desc bm = d;
+        bm.colors[0].blend = (sg_blend_state){.enabled = true, .src_factor_rgb = SG_BLENDFACTOR_ONE, .dst_factor_rgb = SG_BLENDFACTOR_ONE, .op_rgb = SG_BLENDOP_MAX,
+                                              .src_factor_alpha = SG_BLENDFACTOR_ONE, .dst_factor_alpha = SG_BLENDFACTOR_ONE, .op_alpha = SG_BLENDOP_MAX};
+        bm.label = "vx-max";
+        ps.p[PIPE_MAX] = sg_make_pipeline(&bm);
+    }
     {   // subtract: below minus the group, the alpha below kept
         sg_pipeline_desc bm = d;
         bm.colors[0].blend = (sg_blend_state){.enabled = true, .src_factor_rgb = SG_BLENDFACTOR_ONE, .dst_factor_rgb = SG_BLENDFACTOR_ONE, .op_rgb = SG_BLENDOP_REVERSE_SUBTRACT,

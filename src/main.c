@@ -187,6 +187,34 @@ static void selftest_brushes(int f) {
     } else if (M.page == 1) {
         if (f == 3) brush_new();
         if (f == 6) vx_log("selftest: new brush \"%s\" (%d brushes), editing %d", app.presets[app.preset].name, (int)arrlen(app.presets), brush_editing());
+    } else if (M.page == 6 || M.page == 7) {   // --selftest=csp-fold / csp-pen: more Clip Studio brushes, pen strokes
+        if (f == 3) {
+            const char *path = M.page == 6 ? "D:/Programming/Vertexa/research/Clothing Fold Brush\xEF\xBC\x88\xE8\xA4\xB6\xE7\x9A\xB1\xE7\xAC\x94\xEF\xBC\x89.sut"
+                                           : "D:/Programming/Vertexa/research/SRU\xE3\x82\xAB\xE3\x83\xAA\xE3\x82\xAB\xE3\x83\xAA\xE7\xB7\x9A\xE7\x94\xBB\xE3\x83\x9A\xE3\x83\xB3.sut";
+            bool ok = app_open_path(path);
+            BrushPreset *p = &app.presets[app.preset];
+            vx_log("selftest: %s", app.toast);
+            vx_log("selftest: import %s: \"%s\" size %.0f, image \"%s\" mode %d spacing %.1f angle %.0f flags %d widths %.0f %.0f tapers %.0f %.0f", ok ? "ok" : "FAILED", p->name,
+                   p->size, p->tip_image, p->img_mode, p->img_spacing, p->angle, p->img_flags, p->img_w0, p->img_w1, p->taper_s, p->taper_e);
+            app.fill = hex(M.page == 6 ? 0x9aa3a6 : 0xe0141e);
+            if (M.page == 7) app.brush_size = 30;
+            in_key(SAPP_KEYCODE_B, 0);
+        }
+        if (f == 6) {
+            for (int k = 0; k < 7; k++) {   // a wave, a grid and loops, pressure rising then falling
+                V2 pts[60]; float pr[60]; int n = 0;
+                for (int i = 0; i < 60; i++) {
+                    float t = i / 59.0f, x, y;
+                    if (k == 0) { x = 120 + t * 500; y = 120 + sinf(t * 18) * 25; }
+                    else if (k < 4) { x = 700 + (k - 1) * 70; y = 80 + t * 260; }
+                    else if (k < 6) { x = 680 + t * 260; y = 120 + (k - 4) * 120; }
+                    else { x = 300 + cosf(t * 9) * 120 + t * 300; y = 450 + sinf(t * 9) * 90; }
+                    pts[n] = v2(x, y); pr[n] = sinf(t * 3.14159f) * 0.95f + 0.05f; n++;
+                }
+                st_test_stroke(pts, pr, n);
+            }
+        }
+        if (f == 10) in_move(v2(700, 700));
     } else if (M.page == 5) {   // --selftest=csp-tip: a Clip Studio feather brush (image tip), a short and a long stroke
         if (f == 3) {
             bool ok = app_open_path("D:/Programming/Vertexa/research/sut_feather/short 2 detail.sut");
@@ -950,6 +978,8 @@ sapp_desc sokol_main(int argc, char *argv[]) {
         else if (!strcmp(argv[i], "--selftest=export-window")) { M.selftest = true; M.variant = 14; M.page = 1; M.capture_frame = 80; }
         else if (!strcmp(argv[i], "--selftest=brushes")) { M.selftest = true; M.variant = 19; M.capture_frame = 16; }
         else if (!strcmp(argv[i], "--selftest=brush-edit")) { M.selftest = true; M.variant = 19; M.page = 1; M.capture_frame = 10; }
+        else if (!strcmp(argv[i], "--selftest=csp-fold")) { M.selftest = true; M.variant = 19; M.page = 6; M.capture_frame = 14; }
+        else if (!strcmp(argv[i], "--selftest=csp-pen")) { M.selftest = true; M.variant = 19; M.page = 7; M.capture_frame = 14; }
         else if (!strcmp(argv[i], "--selftest=csp-tip")) { M.selftest = true; M.variant = 19; M.page = 5; M.capture_frame = 38; }
         else if (!strcmp(argv[i], "--selftest=texture")) { M.selftest = true; M.variant = 19; M.page = 4; M.capture_frame = 50; }
         else if (!strcmp(argv[i], "--selftest=recolor")) { M.selftest = true; M.variant = 19; M.page = 2; M.capture_frame = 30; }

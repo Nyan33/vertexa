@@ -61,5 +61,6 @@ void brush_union_end(DrawList *dl, Color color);    // ...and one cover shades t
 typedef u32 (*BrushTexFn)(int bitmap, int *w, int *h);
 void brush_texture_source(BrushTexFn fn);
 void stroke_set_texture(Stroke *s, int bitmap, float density, float scale);   // 0: none
-void stroke_set_image(Stroke *s, const BrushOpts *o);   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
+void stroke_set_image(Stroke *s, const BrushOpts *o);
+void brush_image_pipe(u8 pipe);   // how image strokes blend: PIPE_NORMAL, or PIPE_MAX inside a stroke's own group   // how the next covers are shaded (K_STRIPES for selection); K_SOLID is the default
 SPt *brush_resample(const Stroke *st, float step);   // dense centerline (scratch array, valid until the next call)

@@ -14,7 +14,9 @@ enum { K_SOLID, K_GLYPH, K_IMAGE, K_RRECT, K_RING, K_SV, K_CAPSULE, K_CHECKER, K
 // group compositing (premultiplied): MULTIPLY then MULTIPLY2 is an exact multiply in two draws, COPY
 // overwrites, COMPOSITE runs the blend shader on tex (the group) and tex2 (a copy of the backdrop)
 enum { PIPE_NORMAL, PIPE_STENCIL, PIPE_COVER, PIPE_ERASE, PIPE_MULTIPLY, PIPE_SCREEN, PIPE_ADD, PIPE_STENCIL_EO,
-       PIPE_MULTIPLY2, PIPE_SUBTRACT, PIPE_ALPHA, PIPE_ERASE_OUT, PIPE_COPY, PIPE_COMPOSITE, PIPE_FILTER, PIPE_COUNT };
+       PIPE_MULTIPLY2, PIPE_SUBTRACT, PIPE_ALPHA, PIPE_ERASE_OUT, PIPE_COPY, PIPE_COMPOSITE, PIPE_FILTER,
+       PIPE_MAX,      // the larger of the two, per channel (the stamps of one stroke, in a group of their own)
+       PIPE_COUNT };
 // filter shader passes (PIPE_FILTER; parameters in the command's uniform block, see FX_P)
 enum { FXM_BLUR = 1, FXM_ALPHA = 3, FXM_OUTER = 4, FXM_INNER = 5, FXM_ALPHA_INV = 6, FXM_MATRIX = 7, FXM_COPY = 8 };
 #define FX_P 36   // floats per filter uniform block: mode sigma step strength | dir off | colour | flags taps | matrix rows, offsets

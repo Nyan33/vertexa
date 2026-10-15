@@ -570,7 +570,8 @@ int stage_lists(DrawList **out, int cap) {
         Stroke live;
         bb_live(&S.b, &live);
         if (live.erase) brush_draw(dl, &live, em, col_a(C_AC, 0x60), false);
-        else brush_draw(dl, &live, em, live.color, false);
+        else render_stroke(&S.F, &live, em, live.color);
+        dl = frame_dl(&S.F);   // an image stroke ends in a new segment
     }
     for (int i = 0; i < nprev; i++) {
         if (prev[i].kind == IT_FILL) fill_draw(dl, &prev[i], em, prev[i].color, false);

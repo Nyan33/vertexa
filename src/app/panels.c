@@ -557,7 +557,7 @@ static void shape_block(float x, float w, float *py) {
         app.img_mode = (u8)(1 + ui_segmented(ui_id("tip-place"), rect(x + 84, y, w - 84, 30), place, 2, app.img_mode - 1)); y += 30;
         if (app.img_mode == IMG_STAMPS) {
             y += 12;
-            slider_row("tip-spacing", "Spacing", x, w, &y, &app.img_spacing, 5, 300, "%d%%");
+            slider_row("tip-spacing", "Spacing", x, w, &y, &app.img_spacing, 1, 300, "%d%%");
             y += 10;
             slider_row("tip-angle", "Angle", x, w, &y, &app.tip_angle, 0, 359, "%d\xC2\xB0");
         }

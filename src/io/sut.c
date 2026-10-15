@@ -131,6 +131,23 @@ static Curve csp_curve(const Effector *e) {
 
 typedef struct { char name[64]; long long variant; } NodeRef;
 
+// what of a name the interface can show: characters without a glyph (Japanese, Chinese...) are left out,
+// then brackets left empty and loose spaces; "" if nothing is left
+static void shown_name(const char *s, char *out, int cap) {
+    int k = 0;
+    while (*s && k < cap - 5) {
+        int n = (*s & 0x80) == 0 ? 1 : (*s & 0xe0) == 0xc0 ? 2 : (*s & 0xf0) == 0xe0 ? 3 : 4;
+        char ch[5] = {0};
+        for (int i = 0; i < n && s[i]; i++) ch[i] = s[i];
+        if (font_covers(ch)) { memcpy(out + k, ch, strlen(ch)); k += (int)strlen(ch); }
+        s += strlen(ch) ? (int)strlen(ch) : 1;
+    }
+    out[k] = 0;
+    for (char *b; (b = strstr(out, "()")) || (b = strstr(out, "[]")); ) memmove(b, b + 2, strlen(b + 2) + 1);
+    for (char *c = out; *c; c++) if (*c == ' ' && (c[1] == ' ' || c[1] == 0)) { memmove(c, c + 1, strlen(c)); c--; }
+    while (out[0] == ' ' || out[0] == '-' || out[0] == '_') memmove(out, out + 1, strlen(out));
+}
+
 static void base_noext(const char *path, char *out, int cap) {
     const char *b = path;
     for (const char *c = path; *c; c++) if (*c == '/' || *c == '\\') b = c + 1;
@@ -221,7 +238,7 @@ static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx)
                 float rot = num(&r, "BrushRotation", 0);
                 float across = fabsf(fmodf(fabsf(rot), 180) - 90);   // 0: square to the line
                 p->img_mode = num(&r, "BrushRibbon", 0) != 0 && across > 30 ? IMG_ALONG : IMG_STAMPS;
-                p->img_spacing = clampf(num(&r, "BrushInterval", 80), 5, 300);
+                p->img_spacing = clampf(num(&r, "BrushInterval", 80), 1, 300);
                 p->angle = p->img_mode == IMG_STAMPS ? roundf(fmodf(fmodf(rot, 360) + 360, 360)) : 0;
                 p->tip = TIP_ROUND; p->aspect = 1;
                 // CSP's thickness: across the image, by pressure (feathers: long and thin when light, short and round when heavy)
@@ -233,7 +250,10 @@ static bool read_variant(sqlite3 *db, long long id, BrushPreset *p, u32 *approx)
                     Curve tc = csp_curve(&te);
                     p->img_w0 = 100 * tk * curve_eval(&tc, 0); p->img_w1 = 100 * tk * curve_eval(&tc, 1);
                 }
-                if (p->img_mode == IMG_STAMPS) p->taper_s = p->taper_e = 0;   // a stamp is the whole tip
+                // stamps far apart are each a whole tip (feathers, leaves); dense ones draw a line and taper as one
+                if (p->img_mode == IMG_STAMPS && p->img_spacing >= 50) p->taper_s = p->taper_e = 0;
+                // the angle turns with the line only when the rotation follows its direction (0x40)
+                if (!((int)num(&r, "BrushRotationEffector", 0) & 0x40)) p->img_flags |= IMGF_FIXED;
                 *approx |= 16;
             } else *approx |= 1;
             free(copy);
@@ -271,14 +291,18 @@ bool import_sut(const char *path, char *msg, int cap) {
         snprintf(msg, (size_t)cap, "Not a Clip Studio Paint sub tool (.sut) file");
         return false;
     }
-    char fallback[64];
-    base_noext(path, fallback, sizeof(fallback));
+    char fallback[64], fname[64];
+    base_noext(path, fname, sizeof(fname));
+    shown_name(fname, fallback, sizeof(fallback));
+    if (!fallback[0]) snprintf(fallback, sizeof(fallback), "Clip Studio brush");
     int added = 0, first = (int)arrlen(app.presets);
     u32 approx = 0;
     BrushPreset last = {0};
     for (ptrdiff_t i = 0; i < arrlen(nodes); i++) {
         BrushPreset p = {0};
-        const char *name = nodes[i].name[0] && font_covers(nodes[i].name) ? nodes[i].name : fallback;
+        char shown[64];
+        shown_name(nodes[i].name, shown, sizeof(shown));
+        const char *name = shown[0] ? shown : fallback;
         if (arrlen(nodes) > 1 && name == fallback) snprintf(p.name, sizeof(p.name), "%s %d", fallback, (int)i + 1);
         else snprintf(p.name, sizeof(p.name), "%s", name);
         if (!read_variant(db, nodes[i].variant, &p, &approx)) continue;
@@ -297,12 +321,13 @@ bool import_sut(const char *path, char *msg, int cap) {
         static const char *tips[] = {"round", "oval", "square"};
         bool flat = true;
         for (int k = 0; k < last.curve.n; k++) flat &= last.curve.y[k] > 0.99f;
-        snprintf(what, sizeof(what), "Imported \"%s\": %d px, %s tip%s", last.name, (int)last.size, tips[last.tip],
+        snprintf(what, sizeof(what), "Imported \"%s\": %d px, %s tip%s", last.name, (int)last.size, last.img_mode ? "image" : tips[last.tip],
                  flat ? "" : ", pressure curve");
     } else snprintf(what, sizeof(what), "Imported %d brushes from %s", added, fallback);
-    if (approx & 15) snprintf(msg, (size_t)cap, "%s. %s drawn as a solid vector tip", what,
-                         approx & 3 ? "texture" : approx & 4 ? "spray" : "watercolor");
-    else if (approx & 16) snprintf(msg, (size_t)cap, "%s, its tip image (from the brush's preview)", what);
+    if (approx & 16) snprintf(msg, (size_t)cap, "%s (the image from its preview)%s", what,
+                              approx & 8 ? ". Watercolor mixing is left out" : approx & 4 ? ". Spray is left out" : "");
+    else if (approx & 15) snprintf(msg, (size_t)cap, "%s. %s drawn as a solid vector tip", what,
+                                   approx & 3 ? "texture" : approx & 4 ? "spray" : "watercolor");
     else snprintf(msg, (size_t)cap, "%s", what);
     return true;
 }
